@@ -928,7 +928,37 @@ struct StatsService {
         return {{"success", true}, {"data", stats}};
     }
 };
-
+// CORS MIDDLEWARE — applied to every route automatically
+// ============================================================================
+ 
+struct CORSMiddleware {
+    struct context {};
+ 
+    void before_handle(crow::request& req, crow::response& res, context&) {
+        // Handle OPTIONS preflight immediately — no route logic needed
+        if (req.method == crow::HTTPMethod::Options) {
+            std::string origin = req.get_header_value("Origin");
+ 
+            bool allowed = (!origin.empty()) &&
+                           (origin.find("localhost") != std::string::npos ||
+                            origin.find("127.0.0.1") != std::string::npos);
+ 
+            res.set_header("Access-Control-Allow-Origin",
+                           allowed ? origin : "http://localhost:5174");
+            res.set_header("Access-Control-Allow-Methods",
+                           "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+            res.set_header("Access-Control-Allow-Headers",
+                           "Content-Type, Authorization");
+            res.set_header("Access-Control-Allow-Credentials", "true");
+            res.set_header("Access-Control-Max-Age", "3600");
+            res.set_header("Vary", "Origin");
+            res.code = 204;
+            res.end();   // short-circuit — do not process further
+        }
+    }
+ 
+    void after_handle(crow::request&, crow::response&, context&) {}
+};
 // ============================================================================
 // MAIN — ROUTE DEFINITIONS
 // ============================================================================
@@ -939,35 +969,27 @@ struct StatsService {
 // ======================= MAIN (FULL FIXED) =======================
 
 int main() {
-
+ 
     cout << "████████████████████████████████████████████████████████" << endl;
-    cout << "██  FREELANCE MARKETPLACE - BACKEND API (FIXED)        ██" << endl;
+    cout << "██  FREELANCE MARKETPLACE - BACKEND API                ██" << endl;
     cout << "████████████████████████████████████████████████████████" << endl;
-
-    // ======================= DATABASE INIT =======================
+ 
+    // ── DATABASE INIT ────────────────────────────────────────────────────────
     try {
         g_db = new DatabaseManager("freelance_market.db");
         g_db->initializeSchema();
-        cout << "[✓] Database ready for operations" << endl << endl;
+        cout << "[✓] Database ready" << endl << endl;
     } catch (const std::exception& e) {
-        cerr << "[FATAL] Database initialization failed: " << e.what() << endl;
+        cerr << "[FATAL] DB init failed: " << e.what() << endl;
         return 1;
     }
-
-    crow::SimpleApp app;
-
-    // ======================= CORS PREFLIGHT =======================
-    CROW_ROUTE(app, "/api/<path>")
-.methods("OPTIONS"_method)
-([](const crow::request& req, crow::response& res, std::string){
-    res.add_header("Access-Control-Allow-Origin", "*");
-    res.add_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-    res.add_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-    res.code = 204;
-    res.end();
-});
-
-    // ======================= HEALTH =======================
+ 
+    // ── APP with CORS middleware ──────────────────────────────────────────────
+    // Use crow::App<CORSMiddleware> so every request — including OPTIONS
+    // preflights to ANY path — is intercepted before routing.
+    crow::App<CORSMiddleware> app;
+ 
+    // ── HEALTH ───────────────────────────────────────────────────────────────
     CROW_ROUTE(app, "/api/health").methods("GET"_method)
     ([](const crow::request& req) {
         return success(json{
@@ -975,13 +997,13 @@ int main() {
             {"timestamp", currentTimestamp()}
         }, req);
     });
-
-    // ======================= AUTH =======================
-
+ 
+    // ── AUTH ─────────────────────────────────────────────────────────────────
+ 
     CROW_ROUTE(app, "/api/auth/register-freelancer").methods("POST"_method)
     ([](const crow::request& req) {
         try {
-            auto body = json::parse(req.body);
+            auto body   = json::parse(req.body);
             auto result = AuthService::registerFreelancer(body);
             if (result["success"]) return created(result, req);
             return error(400, result["error"], req);
@@ -989,11 +1011,11 @@ int main() {
             return error(500, std::string("Server error: ") + e.what(), req);
         }
     });
-
+ 
     CROW_ROUTE(app, "/api/auth/register-client").methods("POST"_method)
     ([](const crow::request& req) {
         try {
-            auto body = json::parse(req.body);
+            auto body   = json::parse(req.body);
             auto result = AuthService::registerClient(body);
             if (result["success"]) return created(result, req);
             return error(400, result["error"], req);
@@ -1001,11 +1023,11 @@ int main() {
             return error(500, std::string("Server error: ") + e.what(), req);
         }
     });
-
+ 
     CROW_ROUTE(app, "/api/auth/login").methods("POST"_method)
     ([](const crow::request& req) {
         try {
-            auto body = json::parse(req.body);
+            auto body   = json::parse(req.body);
             auto result = AuthService::login(body);
             if (result["success"]) return success(result, req);
             return error(401, result["error"], req);
@@ -1013,9 +1035,9 @@ int main() {
             return error(500, std::string("Server error: ") + e.what(), req);
         }
     });
-
-    // ======================= PROJECTS =======================
-
+ 
+    // ── PROJECTS ─────────────────────────────────────────────────────────────
+ 
     CROW_ROUTE(app, "/api/projects").methods("GET"_method)
     ([](const crow::request& req) {
         try {
@@ -1024,14 +1046,13 @@ int main() {
             return error(500, e.what(), req);
         }
     });
-
+ 
     CROW_ROUTE(app, "/api/projects").methods("POST"_method)
     ([](const crow::request& req) {
         try {
             auto body = json::parse(req.body);
-
+ 
             std::string clientId = body.value("clientId", "");
-
             if (clientId.empty()) {
                 std::string auth = req.get_header_value("Authorization");
                 if (auth.size() > 7) {
@@ -1040,28 +1061,47 @@ int main() {
                     parseToken(token, clientId, role);
                 }
             }
-
+ 
             if (clientId.empty())
                 return error(401, "clientId required", req);
-
+ 
             auto result = ProjectService::create(body, clientId);
             if (result["success"]) return created(result, req);
             return error(400, result["error"], req);
-
+ 
         } catch (const std::exception& e) {
             return error(500, std::string("Server error: ") + e.what(), req);
         }
     });
-
-    // ======================= APPLY =======================
-
+ 
+    // ── CLIENT & FREELANCER DASHBOARDS ───────────────────────────────────────
+ 
+    CROW_ROUTE(app, "/api/projects/client/<string>").methods("GET"_method)
+    ([](const crow::request& req, const std::string& clientId) {
+        try {
+            return success(ProjectService::getForClient(clientId), req);
+        } catch (const std::exception& e) {
+            return error(500, e.what(), req);
+        }
+    });
+ 
+    CROW_ROUTE(app, "/api/projects/freelancer/<string>").methods("GET"_method)
+    ([](const crow::request& req, const std::string& freelancerId) {
+        try {
+            return success(ProjectService::getForFreelancer(freelancerId), req);
+        } catch (const std::exception& e) {
+            return error(500, e.what(), req);
+        }
+    });
+ 
+    // ── APPLICATIONS ─────────────────────────────────────────────────────────
+ 
     CROW_ROUTE(app, "/api/apply").methods("POST"_method)
     ([](const crow::request& req) {
         try {
             auto body = json::parse(req.body);
-
+ 
             std::string freelancerId = body.value("freelancerId", "");
-
             if (freelancerId.empty()) {
                 std::string auth = req.get_header_value("Authorization");
                 if (auth.size() > 7) {
@@ -1070,28 +1110,36 @@ int main() {
                     parseToken(token, freelancerId, role);
                 }
             }
-
+ 
             if (freelancerId.empty())
                 return error(401, "freelancerId required", req);
-
+ 
             auto result = ApplicationService::apply(body, freelancerId);
             if (result["success"]) return created(result, req);
             return error(400, result["error"], req);
-
+ 
         } catch (const std::exception& e) {
             return error(500, std::string("Server error: ") + e.what(), req);
         }
     });
-
-    // ======================= HIRE =======================
-
+ 
+    CROW_ROUTE(app, "/api/applications/<string>").methods("GET"_method)
+    ([](const crow::request& req, const std::string& projectId) {
+        try {
+            return success(ApplicationService::getForProject(projectId), req);
+        } catch (const std::exception& e) {
+            return error(500, e.what(), req);
+        }
+    });
+ 
+    // ── HIRE ─────────────────────────────────────────────────────────────────
+ 
     CROW_ROUTE(app, "/api/hire").methods("POST"_method)
     ([](const crow::request& req) {
         try {
             auto body = json::parse(req.body);
-
+ 
             std::string clientId = body.value("clientId", "");
-
             if (clientId.empty()) {
                 std::string auth = req.get_header_value("Authorization");
                 if (auth.size() > 7) {
@@ -1100,28 +1148,36 @@ int main() {
                     parseToken(token, clientId, role);
                 }
             }
-
+ 
             if (clientId.empty())
                 return error(401, "clientId required", req);
-
+ 
             auto result = ApplicationService::hire(body, clientId);
             if (result["success"]) return success(result, req);
             return error(400, result["error"], req);
-
+ 
         } catch (const std::exception& e) {
             return error(500, std::string("Server error: ") + e.what(), req);
         }
     });
-
-    // ======================= START SERVER =======================
-
-    
-
-    cout << "[Server] Running on http://localhost:8080" << endl;
-    cout << "[INFO] No CORS errors. Registration will work now." << endl;
-
+ 
+    // ── STATS ─────────────────────────────────────────────────────────────────
+ 
+    CROW_ROUTE(app, "/api/stats/<string>/<string>").methods("GET"_method)
+    ([](const crow::request& req,
+        const std::string& userId,
+        const std::string& role) {
+        try {
+            return success(StatsService::getDashboard(userId, role), req);
+        } catch (const std::exception& e) {
+            return error(500, e.what(), req);
+        }
+    });
+ 
+    // ── START ─────────────────────────────────────────────────────────────────
+    cout << "[Server] Listening on http://0.0.0.0:8080" << endl;
     app.port(8080).multithreaded().run();
-
+ 
     delete g_db;
     return 0;
 }
