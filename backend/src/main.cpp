@@ -314,45 +314,49 @@ static bool parseToken(const std::string& token, std::string& outUserId, std::st
 // ============================================================================
 
 static void addCorsHeaders(crow::response& res, const crow::request& req) {
-    // Get the origin from the request
     std::string origin = req.get_header_value("Origin");
-    
-    // If Origin header is present and is localhost, allow it
-    // This accepts any localhost port (5174, 3000, 5132, etc.)
-    if (!origin.empty() && origin.find("localhost") != std::string::npos) {
-        res.set_header("Access-Control-Allow-Origin", origin);
-    } else if (!origin.empty() && origin.find("127.0.0.1") != std::string::npos) {
-        res.set_header("Access-Control-Allow-Origin", origin);
-    } else {
-        // Fallback: allow localhost:5174 (React dev server)
-        res.set_header("Access-Control-Allow-Origin", "http://localhost:5174");
-    }
-    
-    res.set_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-    res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-    res.set_header("Access-Control-Max-Age", "3600");
+ 
+    // Accept any localhost / 127.0.0.1 origin regardless of port
+    bool allowed = (!origin.empty()) &&
+                   (origin.find("localhost") != std::string::npos ||
+                    origin.find("127.0.0.1") != std::string::npos);
+ 
+    res.set_header("Access-Control-Allow-Origin",
+                   allowed ? origin : "http://localhost:5174");
+ 
+    res.set_header("Access-Control-Allow-Methods",
+                   "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+    res.set_header("Access-Control-Allow-Headers",
+                   "Content-Type, Authorization");
     res.set_header("Access-Control-Allow-Credentials", "true");
+    res.set_header("Access-Control-Max-Age", "3600");
+ 
+    // Tells proxies/browsers the response varies by Origin
+    res.set_header("Vary", "Origin");
+ 
     res.set_header("Content-Type", "application/json");
 }
-
+ 
 static crow::response success(const json& data, const crow::request& req) {
     crow::response res(200, data.dump());
     addCorsHeaders(res, req);
     return res;
 }
-
+ 
 static crow::response created(const json& data, const crow::request& req) {
     crow::response res(201, data.dump());
     addCorsHeaders(res, req);
     return res;
 }
-
-static crow::response error(int status, const std::string& message, const crow::request& req) {
-    crow::response res(status, json{{"success", false}, {"error", message}}.dump());
+ 
+static crow::response error(int status, const std::string& message,
+                             const crow::request& req) {
+    crow::response res(status,
+        json{{"success", false}, {"error", message}}.dump());
     addCorsHeaders(res, req);
     return res;
 }
-
+ 
 static crow::response noContent(const crow::request& req) {
     crow::response res(204);
     addCorsHeaders(res, req);
