@@ -1,0 +1,9 @@
+{
+  "name": "freelance-platform",
+  "version": "1.0.0",
+  "dependencies": [
+    "crow",
+    "nlohmann-json",
+    "sqlite3"
+  ]
+}

@@ -1,0 +1,100 @@
+# Full-Stack Freelance Marketplace — Complete Integration Fix
+
+## Problem Summary
+
+The system is partially built but not functional:
+- **Backend** uses in-memory C++ objects; SQLite DB exists ([Database.hpp](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/src/config/Database.hpp)) but routes in [main.cpp](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/main.cpp) never write to it
+- **CMakeLists.txt** links MongoDB (not SQLite), so the build likely fails
+- **Applications/Hire flow** entirely missing — no `/api/apply`, `/api/hire`, `/api/applications` endpoints
+- **Frontend** [Clientprojects.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/Clientprojects.jsx) uses hardcoded mock data; [JobBrowsing.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/JobBrowsing.jsx) posts to `/api/bids` (mismatched endpoint)
+- **No password hashing** — passwords stored as plaintext
+- **CORS** only partially handled (no headers on every response)
+
+---
+
+## Proposed Changes
+
+### Backend — CMake Build Fix
+
+#### [MODIFY] [CMakeLists.txt](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/CMakeLists.txt)
+- Remove MongoDB dependency (project uses SQLite)
+- Add `find_package(SQLite3)` + link `SQLite::SQLite3` and `ws2_32`
+
+---
+
+### Backend — Complete [main.cpp](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/main.cpp) Rewrite
+
+#### [MODIFY] [main.cpp](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/src/main.cpp)
+
+Complete rewrite using:
+- [Database.hpp](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/src/config/Database.hpp) for SQLite connection
+- Schema: fix invalid `INDEX` syntax in [projects](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/Clientprojects.jsx#7-298) table (SQLite uses `CREATE INDEX` separately)
+- Add `applications` table: `id, project_id, freelancer_id, status, cover_letter, created_at`
+- **Password hashing**: use `std::hash` (simple for demo, documented)
+
+**All endpoints:**
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/auth/register-freelancer` | Register + store in `users` + `freelancers` tables |
+| POST | `/api/auth/register-client` | Register + store in `users` + `clients` tables |
+| POST | `/api/auth/login` | Verify password hash, return userId + role + token |
+| GET | `/api/projects` | All open projects from DB |
+| POST | `/api/projects` | Create project (client) |
+| POST | `/api/apply` | Freelancer applies → `applications` table |
+| GET | `/api/applications?project_id=X` | Client views applications for project |
+| POST | `/api/hire` | Client hires → update application + project |
+| GET | `/api/freelancer/projects?freelancer_id=X` | Freelancer sees assigned projects |
+| GET | `/api/stats/dashboard/:userId` | Dashboard stats |
+| OPTIONS | `/api/<path>` | CORS preflight |
+
+All responses include `Access-Control-Allow-Origin: *`.
+
+---
+
+### Frontend — API Service
+
+#### [MODIFY] [api.js](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/services/api.js)
+- Add `applyAPI`: `apply()`, `getApplications(projectId)`, `hire()`, `getFreelancerProjects(freelancerId)`
+- Fix `bidsAPI.submit` → alias to `applyAPI.apply`
+
+---
+
+### Frontend — Pages
+
+#### [MODIFY] [JobBrowsing.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/JobBrowsing.jsx)
+- Change [handleBid](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/JobBrowsing.jsx#32-50) to call `applyAPI.apply({ projectId, freelancerId })`
+- Show cover letter input before applying
+
+#### [MODIFY] [Clientprojects.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/Clientprojects.jsx)
+- Remove all hardcoded mock data
+- Fetch client's projects from API on mount
+- For selected project, fetch applications list
+- Show applicant name, skills, rating
+- "Hire" button → `applyAPI.hire({ applicationId, projectId, freelancerId })`
+
+#### [MODIFY] [FreelancerDashboard.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/FreelancerDashboard.jsx)
+- Fetch `GET /api/freelancer/projects?freelancer_id=X` on mount
+- If assigned project found: show "🎉 You are hired!" banner with project details
+
+---
+
+## Verification Plan
+
+### Build Test
+```powershell
+cd c:\Users\Admin\.gemini\antigravity\scratch\freelance_platform\backend\build
+cmake .. -DCMAKE_TOOLCHAIN_FILE=<vcpkg path>/scripts/buildsystems/vcpkg.cmake
+cmake --build . --config Release
+```
+
+### Manual End-to-End Flow
+1. Start backend: `.\Release\FreelancePlatform.exe`
+2. Start frontend: `cd frontend && npm run dev`
+3. **Register** a freelancer at `http://localhost:5173/signup-freelancer`
+4. **Register** a client at `http://localhost:5173/signup-client`
+5. **Login** as client → Create a project
+6. **Restart backend** → Login as client again → project should still exist (persistence test)
+7. **Login** as freelancer → Browse jobs → Click "Apply Now"
+8. **Login** as client → Go to Client Projects → See application
+9. **Click "Hire"** → Application status → accepted
+10. **Login** as freelancer → Dashboard shows "You are selected" + project info
