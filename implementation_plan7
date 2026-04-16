@@ -1,0 +1,230 @@
+# Freelance Platform — Full Feature Implementation Plan
+
+## Background
+
+The platform uses a **C++ Crow REST API + SQLite3 backend** (not MongoDB — the existing DB is already SQLite and working). The frontend is React/Vite with Tailwind CSS.
+
+The backend [main.cpp](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/main.cpp) has unresolved **git merge conflict markers** (`<<<<<<< HEAD`, `=======`, `>>>>>>>`) which must be cleaned up as part of this work.
+
+> [!IMPORTANT]
+> The database is SQLite3, not MongoDB. All schema and API changes will use SQLite.
+
+---
+
+## User Review Required
+
+> [!WARNING]
+> The backend [main.cpp](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/main.cpp) has git merge conflict markers. The "clean" version (after `>>>>>>>`) appears most complete. I will resolve by keeping the post-merge code and discarding the `HEAD` duplicates. Please confirm this is acceptable.
+
+> [!NOTE]
+> The backend must be **recompiled** after changes. The compiled [FreelancePlatform.exe](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/FreelancePlatform.exe) in the backend folder will need to be rebuilt. You'll need to run `cmake --build . --target FreelancePlatform` or similar from the backend directory.
+
+---
+
+## Proposed Changes
+
+### Backend — [backend/src/main.cpp](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/src/main.cpp)
+
+**New SQLite Tables (added to `initializeSchema()`):**
+
+| Table | Fields |
+|---|---|
+| `messages` | id, project_id, sender_id, receiver_id, message, timestamp |
+| `notifications` | id, project_id, sender_id, message, is_read, timestamp |
+| `payments` | id, project_id, client_id, freelancer_id, amount, status, timestamp |
+
+**Fix:** Clean up all git merge conflict markers. Keep the post-merge `>>>>>>>` version.
+
+**New API Routes:**
+
+| Route | Method | Purpose |
+|---|---|---|
+| `GET /api/projects/<id>/bids` | GET | Fetch bids for a project |
+| `PUT /api/applications/<id>/accept` | PUT | Accept a bid |
+| `PUT /api/applications/<id>/reject` | PUT | Reject a bid |
+| `GET /api/messages/<projectId>` | GET | Fetch messages for a project |
+| `POST /api/messages` | POST | Send a message |
+| `GET /api/notifications/<userId>` | GET | Fetch notifications for user |
+| `POST /api/notifications` | POST | Send notification to project freelancers |
+| `GET /api/payments/<userId>` | GET | Fetch payments for client |
+| `POST /api/payments` | POST | Create payment record |
+| `PUT /api/payments/<id>/release` | PUT | Release payment |
+| `GET /api/freelancers` | GET | All freelancers with score (Find Talent) |
+| `GET /api/analytics/<userId>` | GET | Freelancer analytics data |
+| `GET /api/client/dashboard/<userId>` | GET | Client dashboard stats (full DB) |
+
+**Freelancer Score Formula (computed in backend):**
+```
+score = (completedProjects * 15) + (avgRating * 20) + (reliabilityScore * 0.3) + (skillCount * 5) + (studyYear * 10)
+score = min(100, score)
+```
+
+#### [MODIFY] [main.cpp](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/src/main.cpp)
+
+---
+
+### Frontend — [frontend/src/services/api.js](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/services/api.js)
+
+Add new API service groups:
+
+#### [MODIFY] [api.js](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/services/api.js)
+
+New exports:
+- `messagesAPI` — send, getByProject
+- `notificationsAPI` — send, getForUser, markRead
+- `talentAPI` — getFreelancers
+- `analyticsAPI` — getFreelancerAnalytics
+- `clientDashAPI` — getClientDashboard
+- `bidsAPI.getForProject`, `bidsAPI.accept`, `bidsAPI.reject`
+
+---
+
+### Feature 1 — Projects Page
+
+#### [MODIFY] [Projects.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/Projects.jsx)
+
+- Header: "My Projects"
+- Two sections: **Assigned Projects** (from `applyAPI.getFreelancerProjects`) + **Discover** (2–3 from `projectsAPI.getAll`)
+- Card fields: Title, Description, Client Name, Deadline, GitHub Repo Link (if present), Status badge
+- Loading skeletons + empty states
+
+---
+
+### Feature 2 — Chat System
+
+#### [NEW] [ChatWidget.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/components/ChatWidget.jsx)
+
+- Displays messages in bubble format with timestamps
+- Polls every 5 seconds for new messages (`GET /api/messages/<projectId>`)
+- Send message via `POST /api/messages`
+- Embedded in [ProjectDetails.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/ProjectDetails.jsx)
+
+#### [MODIFY] [ProjectDetails.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/ProjectDetails.jsx)
+
+- Add `<ChatWidget projectId={id} />` at bottom
+
+---
+
+### Feature 3 — Notifications
+
+#### [NEW] [NotificationPanel.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/components/NotificationPanel.jsx)
+
+- Bell icon with unread badge count
+- Dropdown list of notifications
+- Polls every 10 seconds
+- Client "Broadcast" button sends to all freelancers on a project
+
+#### [MODIFY] [Layouts.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/components/Layouts.jsx)
+
+- Add `<NotificationPanel />` to both `ClientLayout` and `FreelancerLayout`
+
+---
+
+### Feature 4 — Analytics Page
+
+#### [NEW] [Analytics.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/Analytics.jsx)
+
+- Uses Recharts (already installed)
+- Charts: Earnings over time (LineChart), Project status breakdown (BarChart)
+- Stat cards: Completed, Active, Total Earned, Score
+- Data fetched from `GET /api/analytics/<userId>`
+
+#### [MODIFY] [App.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/App.jsx)
+
+- Add route `/analytics` → `<Analytics />`
+- Add to FreelancerLayout sidebar
+
+#### [MODIFY] [FreelancerSidebar.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/components/FreelancerSidebar.jsx)
+
+- Add "Analytics" nav item
+
+---
+
+### Feature 5 — Explore Jobs Fix
+
+#### [MODIFY] [JobBrowsing.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/JobBrowsing.jsx)
+
+- On load, fetch `applyAPI.getFreelancerProjects(userId)` to get applied project IDs
+- For each job, check if `appliedIds.includes(job.id)` → disable "Apply Now" button
+- On successful apply → add to local applied set (no duplicate attempt needed)
+
+---
+
+### Feature 6 — Client Dashboard Full DB Connect
+
+#### [MODIFY] [ClientDashboard.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/ClientDashboard.jsx)
+
+- Replace [getAll()](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/services/api.js#46-47) with `projectsAPI.getForClient(userId)` — only this client's projects
+- Fetch real stats from `clientDashAPI.getClientDashboard(userId)`
+- Replace hardcoded People Waitlist with real applications data
+- Replace hardcoded activity feed with recent project activity from DB
+
+---
+
+### Feature 7 — Freelancer Score System
+
+- Score computed in backend when fetching freelancers list and freelancer stats
+- Displayed in [FreelancerRecommendations.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/FreelancerRecommendations.jsx) and [BIDMANAGER_CLIENT.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/BIDMANAGER_CLIENT.jsx)
+
+---
+
+### Feature 8 — Payout System DB Sync
+
+#### [MODIFY] [ClientPayouts.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/ClientPayouts.jsx)
+
+- Remove `MOCK_PAYOUTS` constant
+- On load: fetch from `GET /api/payments/<userId>`
+- Release: call `PUT /api/payments/<id>/release`
+- Show real freelancer name + project title from DB response
+
+---
+
+### Feature 9 — Bid Management DB Sync
+
+#### [MODIFY] [BIDMANAGER_CLIENT.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/BIDMANAGER_CLIENT.jsx)
+
+- Remove `FALLBACK_BIDDERS`
+- Fetch client's projects from DB → show as project cards
+- On project select → fetch bids via `GET /api/projects/<id>/bids`
+- Accept → `PUT /api/applications/<id>/accept` → update DB + UI instantly
+- Reject → `PUT /api/applications/<id>/reject` → update DB + UI
+
+---
+
+### Feature 10 — Find Talent (DB Only)
+
+#### [MODIFY] [FreelancerRecommendations.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/FreelancerRecommendations.jsx)
+
+- Remove hardcoded recommendation data + `setTimeout` mock
+- Fetch from `GET /api/freelancers`
+- Display: Name, Skills (from comma-separated DB field), Experience (study year), Score (computed)
+
+---
+
+## Verification Plan
+
+### Automated Tests
+No existing test suite found. The backend can be tested via PowerShell:
+```powershell
+# Health check
+Invoke-RestMethod -Uri "http://localhost:8080/api/health"
+
+# Get projects
+Invoke-RestMethod -Uri "http://localhost:8080/api/projects"
+
+# Get freelancers
+Invoke-RestMethod -Uri "http://localhost:8080/api/freelancers"
+```
+
+### Manual Verification (Browser)
+
+1. **Backend**: Run [FreelancePlatform.exe](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/FreelancePlatform.exe) in backend folder → confirm no startup errors in console
+2. **Client Dashboard**: Login as client → `/client-dashboard` → confirm no hardcoded values (stats = 0 if no data, no fake names)
+3. **My Projects**: Login as freelancer → `/my-projects` → should show assigned projects + discover section
+4. **Bid Manager**: Login as client → `/client-manage-bids` → see real projects from DB, bids from DB; Accept a bid → refresh → bid status updated
+5. **Find Talent**: Login as client → `/recommendations/project-client` → see real freelancers from DB
+6. **Explore Jobs**: Login as freelancer → `/freelancer-projects` → apply to a job → button changes to "Applied" → try applying again → button should be disabled
+7. **Chat**: Navigate to `/project/<id>` → chat widget visible → send message → appears in bubble
+8. **Notifications**: Bell icon in layout → notifications dropdown shows DB notifications
+9. **Analytics**: Navigate to `/analytics` → charts render with real data (or zero state if no data)
+10. **Payouts**: Login as client → `/client-payouts` → no mock data → real payments or empty state

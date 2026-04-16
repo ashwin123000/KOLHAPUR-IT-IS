@@ -1,12 +1,12 @@
 import React from 'react';
-import { Home, FolderOpen, Clock, FileText, ClipboardCheck, FilePlus, BarChart2, Settings, Search, Briefcase } from 'lucide-react';
+import { Home, FolderOpen, Clock, FileText, ClipboardCheck, FilePlus, BarChart2, Settings, Briefcase, Sparkles, Bot } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
 export default function FreelancerSidebar() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const isActive = (path) => location.pathname === path;
+  const isActive = (path) => location.pathname === path || location.pathname.startsWith(path + '/');
 
   const getButtonClass = (path) =>
     `w-full text-left px-4 py-3 rounded-lg font-medium flex items-center gap-3 transition ${
@@ -23,8 +23,9 @@ export default function FreelancerSidebar() {
       </div>
       
       <nav className="flex-1 px-4 space-y-1 mt-4 overflow-y-auto">
-        <button onClick={() => navigate('/freelancer-projects')} className={getButtonClass('/freelancer-projects')}>
-          <Search size={18} className={getIconClass('/freelancer-projects')}/> EXPLORE JOBS
+        <button onClick={() => navigate('/jobs')} className={getButtonClass('/jobs')}>
+          <Sparkles size={18} className={isActive('/jobs') ? 'text-green-400' : 'text-green-500'}/> AI JOBS
+          {!isActive('/jobs') && <span className="ml-auto text-[10px] bg-green-500/20 text-green-400 border border-green-500/30 px-1.5 py-0.5 rounded font-bold uppercase">New</span>}
         </button>
         <button onClick={() => navigate('/freelancer-dashboard')} className={getButtonClass('/freelancer-dashboard')}>
            <BarChart2 size={18} className={getIconClass('/freelancer-dashboard')}/> ANALYTICS
@@ -33,10 +34,10 @@ export default function FreelancerSidebar() {
            <FolderOpen size={18} className={getIconClass('/my-projects')}/> MY PROJECTS
         </button>
         <button onClick={() => navigate('/bidder-management')} className={getButtonClass('/bidder-management')}>
-           <Briefcase size={18} className={getIconClass('/bidder-management')}/> BIDDER MANAGEMENT
+           <Briefcase size={18} className={getIconClass('/bidder-management')}/> VM TEST MANAGER
         </button>
-        <button onClick={() => navigate('/my-invoices')} className={getButtonClass('/my-invoices')}>
-           <FilePlus size={18} className={getIconClass('/my-invoices')}/> INVOICES
+        <button onClick={() => navigate('/ai-analyzer')} className={getButtonClass('/ai-analyzer')}>
+           <Bot size={18} className={getIconClass('/ai-analyzer')}/> AI ANALYZER
         </button>
       </nav>
 

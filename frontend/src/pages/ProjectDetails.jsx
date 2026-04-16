@@ -1,6 +1,7 @@
 import React from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ChevronLeft, Info, Bookmark, Share2 } from 'lucide-react';
+import ChatWidget from '../components/ChatWidget';
 
 export default function ProjectDetails() {
   const { id } = useParams();
@@ -129,6 +130,9 @@ export default function ProjectDetails() {
             </ul>
          </section>
       </div>
+      
+      {/* Real-time Project Chat */}
+      <ChatWidget projectId={id} currentUserId={localStorage.getItem('userId')} />
     </div>
   );
 }

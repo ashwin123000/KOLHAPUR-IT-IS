@@ -1,270 +1,493 @@
-import React, { useState, useEffect } from 'react';
-import { Folder, FileText, CheckCircle } from 'lucide-react';
-import { projectsAPI, bidsAPI } from '../services/api';
+import React, { useState, useEffect, useRef } from 'react';
+import { Folder, CheckCircle, XCircle, Clock, AlertCircle, TrendingUp, TrendingDown, Calendar, Send } from 'lucide-react';
+import { projectsAPI, applyAPI, messagesAPI } from '../services/api';
+import CircularTimer from '../components/CircularTimer';
 
-const FALLBACK_BIDDERS = [
-  { id: "bid_1", name: "Arsh Jenkins", match: 97, score: 29, outOf: 30, amount: "$13k", amountNum: 13000, timeline: "2 months", valueScore: 9.1, bestValue: false },
-  { id: "bid_2", name: "Jane Doe", match: 93, score: 30, outOf: 30, amount: "$15k", amountNum: 15000, timeline: "2 months", valueScore: 8.8, bestValue: false },
-  { id: "bid_3", name: "Janet Doe", match: 97, score: 25, outOf: 30, amount: "$12k", amountNum: 12000, timeline: "2 months", valueScore: 8.0, bestValue: false },
-  { id: "bid_4", name: "James Smith", match: 97, score: 28, outOf: 30, amount: "$10k", amountNum: 10000, timeline: "2 months", valueScore: 9.4, bestValue: true },
-];
-
-const BidManagerClient = () => {
-  const [selectedBidder, setSelectedBidder] = useState("Arsh Jenkins");
-  const [bidders, setBidders] = useState(FALLBACK_BIDDERS);
+export default function BidManagerClient() {
+  const clientId = localStorage.getItem('userId') || '';
   const [projects, setProjects] = useState([]);
+  const [bids, setBids] = useState([]);
+  const [selectedProject, setSelectedProject] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(null);
+  const [negMsg, setNegMsg] = useState({});
+  const [projectMessages, setProjectMessages] = useState([]);
+
+  // Deadline Modal State
+  const [showDeadlineModal, setShowDeadlineModal] = useState(false);
+  const [hiringBid, setHiringBid] = useState(null);
+  const [deadlineDays, setDeadlineDays] = useState(1);
+  const [deadlineHours, setDeadlineHours] = useState(0);
+
+  // Fix stale closure in poll interval
+  const selectedProjectRef = useRef(null);
+  useEffect(() => { selectedProjectRef.current = selectedProject; }, [selectedProject]);
 
   useEffect(() => {
-    projectsAPI.getAll()
+    if (!clientId) { setLoading(false); return; }
+    refreshProjects();
+    const pollId = setInterval(() => { refreshProjects(); }, 5000);
+    return () => clearInterval(pollId);
+  }, [clientId]);
+
+  const refreshProjects = () => {
+    projectsAPI.getForClient(clientId)
       .then(res => {
-        const data = res.data?.data || [];
-        if (data.length > 0) setProjects(data.slice(0, 4));
-        // Fetch bids for first project
-        if (data[0]?.id) {
-          return projectsAPI.getBids(data[0].id);
+        const raw = res.data?.data || [];
+        const data = raw.map(p => {
+          const isArray = Array.isArray(p);
+          return {
+            id:          isArray ? p[0] : (p.id || p.projectId),
+            clientId:    isArray ? p[1] : p.client_id,
+            title:       isArray ? p[2] : p.title,
+            description: isArray ? p[3] : p.description,
+            budget:      isArray ? p[4] : p.budget,
+            status:      isArray ? p[5] : p.status,
+            assignedFreelancerId: isArray ? p[6] : p.assigned_freelancer_id,
+          };
+        });
+
+        setProjects(data);
+
+        const currentSel = selectedProjectRef.current;
+        if (data.length > 0 && !currentSel) {
+          const firstProj = data[0].id;
+          setSelectedProject(firstProj);
+          selectedProjectRef.current = firstProj;
+          fetchBids(firstProj);
+          fetchMessages(firstProj);
+        } else if (currentSel) {
+          fetchBids(currentSel);
+          fetchMessages(currentSel);
+        } else {
+          setLoading(false);
         }
       })
-      .then(bidsRes => {
-        if (!bidsRes) return;
-        const serverBids = bidsRes.data?.bids || [];
-        if (serverBids.length > 0) {
-          setBidders(serverBids.map((b, i) => ({
-            id: b.id,
-            name: b.freelancerName || `Bidder ${i + 1}`,
-            match: b.skillScore || 90,
-            score: Math.round((b.skillScore || 85) * 30 / 100),
-            outOf: 30,
-            amount: `$${(b.amount / 1000).toFixed(0)}k`,
-            amountNum: b.amount,
-            timeline: b.timeline || '2 months',
-            valueScore: b.priceValueScore || 8.5,
-            bestValue: i === 0,
-          })));
-        }
+      .catch(() => setLoading(false));
+  };
+
+  const fetchBids = (projectId) => {
+    applyAPI.getApplications(projectId)
+      .then(res => {
+        const rawBids = res.data?.data || [];
+        const mappedBids = rawBids.map(b => {
+          const isArray = Array.isArray(b);
+          return {
+            applicationId: isArray ? b[0] : (b.applicationId || b.id),
+            projectId:     isArray ? b[1] : (b.projectId || b.project_id),
+            freelancerId:  isArray ? b[2] : (b.freelancerId || b.freelancer_id),
+            status:        isArray ? b[3] : b.status,
+            coverLetter:   isArray ? b[4] : b.cover_letter,
+            bidAmount:     isArray ? b[5] : (b.bidAmount || b.bid_amount),
+            freelancerName: `Freelancer ${isArray ? b[2].slice(-4) : ''}`,
+            reliabilityScore: 100
+          };
+        });
+        setBids(mappedBids);
       })
-      .catch(() => {}); // keep fallback
-  }, []);
+      .catch(() => setBids([]))
+      .finally(() => setLoading(false));
+  };
+
+  const fetchMessages = (projectId) => {
+    messagesAPI.getByProject(projectId)
+      .then(res => {
+        const raw = res.data?.data || [];
+        const msgs = raw.map(m => {
+          const isArray = Array.isArray(m);
+          return {
+            id:         isArray ? m[0] : m.id,
+            projectId:  isArray ? m[1] : m.project_id,
+            senderId:   isArray ? m[2] : (m.senderId || m.sender_id),
+            receiverId: isArray ? m[3] : (m.receiverId || m.receiver_id),
+            content:    isArray ? m[4] : (m.content || m.message),
+            timestamp:  isArray ? m[5] : m.timestamp,
+          };
+        });
+        setProjectMessages(msgs);
+      })
+      .catch(() => {});
+  };
+  const handleSelectProject = (projectId) => {
+    setSelectedProject(projectId);
+    fetchBids(projectId);
+    fetchMessages(projectId);
+  };
+
+  const handleHireClick = (bid) => {
+    setHiringBid(bid);
+    setShowDeadlineModal(true);
+  };
+
+  const handleConfirmHire = async () => {
+    if (!hiringBid) return;
+    setActionLoading(hiringBid.applicationId || hiringBid.id);
+    try {
+      await applyAPI.hire({
+        applicationId: hiringBid.applicationId || hiringBid.id,
+        projectId: selectedProject,
+        freelancerId: hiringBid.freelancerId
+      });
+      alert("Freelancer hired!");
+      setShowDeadlineModal(false);
+      refreshProjects();
+    } catch (err) {
+      alert("Hiring failed: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setActionLoading(null);
+    }
+  };
 
   const handleBidAction = async (bidId, action) => {
     setActionLoading(bidId + action);
     try {
-      if (action === 'accept') await bidsAPI.accept(bidId);
-      else if (action === 'shortlist') await bidsAPI.shortlist(bidId);
-      else if (action === 'reject') await bidsAPI.reject(bidId);
-    } catch (e) { /* fail silently on demo */ }
+      if (action === 'reject') {
+        setBids(prev => prev.filter(b => (b.applicationId || b.id) !== bidId));
+      }
+    } catch (_) {}
     finally { setActionLoading(null); }
   };
 
-  const handleSelect = (name) => { setSelectedBidder(name); };
+  const handleNegotiate = async (bidId, freelancerId) => {
+    const msg = negMsg[bidId];
+    if (!msg || !msg.trim()) return;
+
+    const currentClientId = clientId || localStorage.getItem('userId');
+    if (!currentClientId) {
+      alert("Error: Your Client ID is missing. Please log out and back in.");
+      return;
+    }
+
+    setActionLoading(bidId + 'neg');
+    const payload = {
+      projectId: selectedProject,
+      senderId: currentClientId,
+      receiverId: freelancerId,
+      content: msg
+    };
+
+    try {
+      await messagesAPI.send(payload);
+      setNegMsg(prev => ({ ...prev, [bidId]: '' }));
+      fetchMessages(selectedProject);
+    } catch (err) {
+      alert("Failed to send: " + (err.response?.data?.error || "Error"));
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleVerify = async (projectId, verify) => {
+    try {
+      await projectsAPI.verify(projectId, verify);
+      alert(verify ? "Work verified and project closed!" : "Submission undone. Project back to In Progress.");
+      refreshProjects();
+    } catch (err) {
+      alert("Action failed");
+    }
+  };
+
+  const currProj = projects.find(p => (p.projectId || p.id) === selectedProject);
+
+  const getMessagesForBid = (bid) =>
+    projectMessages.filter(m =>
+      String(m.senderId) === String(bid.freelancerId) ||
+      String(m.receiverId) === String(bid.freelancerId) ||
+      String(m.senderId) === String(clientId) ||
+      String(m.receiverId) === String(clientId)
+    );
 
   return (
-    <div className="max-w-[1400px] mx-auto space-y-6 font-sans text-slate-800">
-      
-      {/* HEADER */}
-      <div className="flex justify-between items-center bg-white rounded-lg p-4 border border-slate-200 shadow-sm">
-        <h1 className="text-xl font-bold uppercase tracking-wide">Client Bid Management Dashboard</h1>
+    <div className="max-w-[1200px] mx-auto p-4 space-y-6">
+
+      {/* Header */}
+      <div className="bg-white rounded-xl p-6 border shadow-sm flex justify-between items-center">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800">Bid Management</h1>
+          <p className="text-sm text-slate-500 mt-1">Review proposals and hire top talent for your projects.</p>
+        </div>
+        <div className="flex gap-4">
+          <div className="bg-green-50 px-4 py-2 rounded-lg border border-green-100">
+            <p className="text-xs text-green-600 font-bold uppercase">System Status</p>
+            <p className="text-sm font-black text-green-700">OOP Integrated</p>
+          </div>
+        </div>
       </div>
 
-      {/* HORIZONTAL PROJECT CARDS */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {[
-          { title: "Request Beta (UI/UX)", sub: "sarah Jenkins" },
-          { title: "App Redesign - alpha", sub: "alpha" },
-          { title: "Request Beta (UI/UX)", sub: "sarah sian" },
-          { title: "Project Possign - alpha", sub: "alpha" }
-        ].map((card, idx) => (
-          <div key={idx} className="bg-white border text-center border-slate-200 rounded-xl p-4 shadow-sm relative hover:border-blue-300 transition-colors cursor-pointer group">
-            <h3 className="font-semibold text-sm truncate">{card.title}</h3>
-            <p className="text-xs text-slate-500 mt-1">Client Info - {card.sub}</p>
-            <div className="mt-3">
-              <span className="inline-block px-2.5 py-0.5 bg-green-100 text-green-700 text-xs font-bold rounded-md">Open</span>
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+
+        {/* Sidebar: Projects List */}
+        <div className="lg:col-span-1 space-y-3">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400 px-1 flex items-center gap-2">
+            <Folder size={14} /> My Projects
+          </h2>
+
+          {projects.length === 0 && !loading && (
+            <div className="bg-white border rounded-xl p-6 text-center text-slate-400 text-sm">
+              No projects posted yet.
             </div>
-            
-            {/* Tooltip on hover for the 2nd item */}
-            {idx === 1 && (
-              <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-48 bg-white border border-slate-200 shadow-xl rounded-lg p-3 z-10 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all">
-                <p className="text-sm font-semibold">Bid details</p>
-                <p className="text-xs text-slate-500">Client info: $133k</p>
+          )}
+
+          {projects.map(p => {
+            const pid = p.id;
+            const isSel = selectedProject === pid;
+            return (
+              <div
+                key={pid}
+                onClick={() => !isSel && handleSelectProject(pid)}
+                className={`p-4 rounded-xl border cursor-pointer transition-all ${
+                  isSel ? 'bg-blue-600 border-blue-600 text-white shadow-md' : 'bg-white border-slate-200 hover:border-blue-300 text-slate-700'
+                }`}
+              >
+                <div className="flex justify-between items-start mb-1">
+                  <h3 className="font-bold text-sm truncate pr-2">{p.title}</h3>
+                  {p.submissionStatus === 'BEFORE' && <TrendingUp size={14} className="text-green-400" />}
+                  {p.submissionStatus === 'LATE' && <TrendingDown size={14} className="text-red-400" />}
+                </div>
+                <div className={`text-[10px] mt-2 inline-block px-2 py-0.5 rounded-full font-semibold uppercase ${
+                  isSel ? 'bg-blue-500 text-blue-50' : 'bg-slate-100 text-slate-500'
+                }`}>
+                  {(p.status || '').replace('_', ' ')}
+                </div>
+                {p.submissionStatus && (
+                  <div className={`text-[9px] font-black mt-2 block ${
+                    p.submissionStatus === 'LATE' ? 'text-red-300' : 'text-green-300'
+                  }`}>
+                    {p.submissionStatus === 'LATE' ? 'LOSS DETECTED (LATE)' : 'PROFITABLE (EARLY)'}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Main Area: Bids List */}
+        <div className="lg:col-span-3">
+          <div className="bg-white border rounded-xl shadow-sm overflow-hidden min-h-[500px]">
+
+            <div className="bg-slate-50 border-b p-4 flex justify-between items-center">
+              <h2 className="font-bold text-slate-800">
+                {loading ? 'Loading Bids...' : `Proposals (${bids.length})`}
+              </h2>
+            </div>
+
+            {loading ? (
+              <div className="p-6 space-y-4">
+                {[1, 2, 3].map(i => <div key={i} className="h-24 bg-slate-100 animate-pulse rounded-lg" />)}
+              </div>
+            ) : bids.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-96 text-slate-400">
+                <AlertCircle size={48} className="mb-4 opacity-30" />
+                <p>No proposals received for this project yet.</p>
+              </div>
+            ) : (
+              <div className="divide-y">
+                {bids.map(bid => {
+                  const bidMessages = getMessagesForBid(bid);
+                  const bidId = bid.applicationId || bid.id;
+                  return (
+                    <div key={bidId} className="p-6 hover:bg-slate-50 transition-colors">
+                      <div className="flex flex-col md:flex-row gap-6 justify-between">
+
+                        {/* Left: Freelancer Info */}
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-2">
+                            <h3 className="text-lg font-bold text-slate-800">{bid.freelancerName || 'Freelancer'}</h3>
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${
+                              bid.status === 'accepted' ? 'bg-green-100 text-green-700' :
+                              bid.status === 'rejected'  ? 'bg-red-100 text-red-700' :
+                              'bg-amber-100 text-amber-700'
+                            }`}>
+                              {bid.status}
+                            </span>
+                          </div>
+
+                          <div className="flex gap-4 text-xs text-slate-500 mb-3">
+                            <span className="flex items-center gap-1"><TrendingUp size={12} /> {bid.reliabilityScore || 0}% Trust</span>
+                            <span className="flex items-center gap-1"><Calendar size={12} /> Year {bid.studyYear || '?'}</span>
+                          </div>
+
+                          <p className="text-sm text-slate-600 leading-relaxed bg-white border p-3 rounded-lg mt-3 italic text-gray-400">
+                            "{bid.coverLetter || 'No cover letter provided.'}"
+                          </p>
+                        </div>
+
+                        {/* Right: Bid Amount + Negotiation Panel */}
+                        <div className="flex flex-row md:flex-col justify-between items-end md:items-end gap-3 min-w-[160px] pl-6 md:border-l border-slate-100">
+                          <div className="text-right">
+                            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Bid Amount</p>
+                            <p className="text-2xl font-black text-slate-800">${(bid.bidAmount || 0).toLocaleString()}</p>
+                          </div>
+
+                          {(bid.status === 'pending' || bid.status === 'accepted') && (
+                            <div className="flex flex-col gap-2 w-full mt-3 p-3 bg-blue-50/50 rounded-2xl border border-blue-100">
+                              <p className="text-[9px] font-bold text-blue-600 uppercase tracking-widest pl-1 mb-1">Negotiation Node</p>
+
+                              {/* Chat History */}
+                              <div className="max-h-40 overflow-y-auto space-y-2 mb-3 px-1">
+                                {bidMessages.map(m => (
+                                  <div
+                                    key={m.id}
+                                    className={`p-2 rounded-xl text-[10px] border ${
+                                      String(m.senderId) === String(clientId)
+                                        ? 'bg-blue-100 ml-4 border-blue-200'
+                                        : 'bg-white mr-4 border-slate-200'
+                                    }`}
+                                  >
+                                    <p className="font-bold text-slate-500 mb-1 uppercase tracking-tighter">
+                                      {String(m.senderId) === String(clientId) ? 'You' : (m.senderName || 'Freelancer')}
+                                    </p>
+                                    <p className="text-slate-700 italic">"{m.content || m.message}"</p>
+                                  </div>
+                                ))}
+                                {bidMessages.length === 0 && (
+                                  <p className="text-[9px] text-slate-400 italic text-center py-2">No transmissions logged</p>
+                                )}
+                              </div>
+
+                              {/* Message Input */}
+                              <div className="flex gap-2">
+                                <input
+                                  type="text"
+                                  placeholder="Message freelancer (e.g. 'Can you do $3500?')"
+                                  value={negMsg[bidId] || ''}
+                                  onChange={(e) => setNegMsg(prev => ({ ...prev, [bidId]: e.target.value }))}
+                                  className="flex-1 text-[11px] border border-blue-200 rounded-xl p-3 outline-none focus:ring-2 focus:ring-blue-500 transition-all bg-white shadow-sm"
+                                />
+                                <button
+                                  onClick={() => handleNegotiate(bidId, bid.freelancerId)}
+                                  disabled={actionLoading === bidId + 'neg'}
+                                  className="bg-blue-600 text-white px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-700 disabled:opacity-50 shadow-md shadow-blue-200 transition-all flex items-center gap-2"
+                                >
+                                  {actionLoading === bidId + 'neg' ? '...' : <><Send size={12} /> Negotiate</>}
+                                </button>
+                              </div>
+
+                              {/* Hire / Reject — only for pending */}
+                              {bid.status === 'pending' && (
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => handleBidAction(bidId, 'reject')}
+                                    disabled={actionLoading === bidId + 'reject'}
+                                    className="flex-1 flex justify-center items-center p-2 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 font-semibold transition-colors disabled:opacity-50"
+                                    title="Reject"
+                                  >
+                                    <XCircle size={18} />
+                                  </button>
+                                  <button
+                                    onClick={() => handleHireClick(bid)}
+                                    disabled={actionLoading === bidId}
+                                    className="flex-[2] flex justify-center items-center gap-1.5 p-2 rounded-lg bg-green-600 text-white hover:bg-green-700 font-bold shadow-sm disabled:opacity-50 transition-colors"
+                                  >
+                                    <CheckCircle size={16} /> Hire
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
-          </div>
-        ))}
-      </div>
 
-      {/* METRICS ROW */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm text-center">
-          <p className="text-sm font-semibold text-slate-600">Total Bids Received</p>
-          <h2 className="text-3xl font-black mt-2">15</h2>
-        </div>
-        <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm text-center">
-          <p className="text-sm font-semibold text-slate-600">Average Bid Amount</p>
-          <h2 className="text-3xl font-black mt-2">$13,500</h2>
-        </div>
-      </div>
-
-      {/* CHART & INSIGHTS SECTION */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-        <div className="lg:col-span-3 bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
-          <h3 className="text-sm font-bold uppercase tracking-wider mb-4 border-b pb-2">Value & Trade-off Analysis</h3>
-          <div className="relative w-full h-48 mt-4 flex items-end">
-             {/* Y-Axis Left (Score) */}
-             <div className="absolute left-0 top-0 h-full flex flex-col justify-between text-[10px] text-slate-400 py-1 font-mono text-right w-8">
-                <span>10-</span>
-                <span>8-</span>
-                <span>6-</span>
-                <span>4-</span>
-                <span>0-</span>
-             </div>
-             
-             {/* Chart Area */}
-             <div className="w-full flex-1 ml-10 mr-4 h-full relative border-l border-b border-slate-200">
-               {/* Grid */}
-               <div className="absolute w-full h-full flex flex-col justify-between pointer-events-none">
-                 <div className="border-b border-dashed border-slate-100 w-full flex-1"></div>
-                 <div className="border-b border-dashed border-slate-100 w-full flex-1"></div>
-                 <div className="border-b border-dashed border-slate-100 w-full flex-1"></div>
-                 <div className="w-full flex-1"></div>
-               </div>
-               
-               {/* Bars */}
-               <div className="absolute w-full h-full flex items-end justify-around px-2 lg:px-6 z-10">
-                 {/* Arsh Jenkins (9.1) */}
-                 <div className="w-12 md:w-16 bg-blue-500 hover:bg-blue-600 rounded-t-lg transition-all flex flex-col items-center justify-end group shadow-[0_-2px_6px_rgba(0,0,0,0.05)]" title="Arsh Jenkins: $13k" style={{height: '91%'}}>
-                   <span className="opacity-0 group-hover:opacity-100 text-[10px] font-bold text-white mb-2 transition-opacity">9.1</span>
-                 </div>
-                 {/* Jane Doe (8.8) */}
-                 <div className="w-12 md:w-16 bg-slate-300 hover:bg-blue-600 rounded-t-lg transition-all flex flex-col items-center justify-end group shadow-[0_-2px_6px_rgba(0,0,0,0.05)]" title="Jane Doe: $15k" style={{height: '88%'}}>
-                   <span className="opacity-0 group-hover:opacity-100 text-[10px] font-bold text-white mb-2 transition-opacity">8.8</span>
-                 </div>
-                 {/* Janet Doe (8.0) */}
-                 <div className="w-12 md:w-16 bg-slate-300 hover:bg-blue-600 rounded-t-lg transition-all flex flex-col items-center justify-end group shadow-[0_-2px_6px_rgba(0,0,0,0.05)]" title="Janet Doe: $12k" style={{height: '80%'}}>
-                   <span className="opacity-0 group-hover:opacity-100 text-[10px] font-bold text-white mb-2 transition-opacity">8.0</span>
-                 </div>
-                 {/* James Smith (9.4) */}
-                 <div className="w-12 md:w-16 bg-[#16a34a] hover:bg-green-600 rounded-t-lg transition-all flex flex-col items-center justify-end group relative shadow-[0_-2px_6px_rgba(0,0,0,0.1)]" title="James Smith: $10k" style={{height: '94%'}}>
-                   <div className="absolute -top-6 bg-green-100 text-green-800 border border-green-200 text-[8px] font-bold px-1.5 md:px-2 py-0.5 rounded shadow-sm whitespace-nowrap">Best Value</div>
-                   <span className="opacity-0 group-hover:opacity-100 text-[10px] font-bold text-white mb-2 transition-opacity">9.4</span>
-                 </div>
-               </div>
-             </div>
-             
-             {/* X-Axis */}
-             <div className="absolute bottom-[-24px] w-full ml-10 pr-4 flex justify-around text-[10px] text-slate-600 font-semibold px-2 lg:px-6">
-               <span className="w-12 md:w-16 text-center truncate">Arsh J.</span>
-               <span className="w-12 md:w-16 text-center truncate">Jane D.</span>
-               <span className="w-12 md:w-16 text-center truncate">Janet D.</span>
-               <span className="w-12 md:w-16 text-center truncate">James S.</span>
-             </div>
-             
-             {/* Axis Title */}
-             <div className="absolute -left-2 top-1/2 -rotate-90 -translate-y-1/2 text-[10px] font-bold tracking-widest text-slate-500 uppercase whitespace-nowrap">Value Score</div>
           </div>
+
+          {/* Verification Section */}
+          {currProj?.status === 'submitted' && (
+            <div className="mt-6 bg-slate-800 rounded-xl p-6 text-white shadow-xl flex justify-between items-center">
+              <div className="flex items-center gap-4">
+                <div className="bg-green-500 p-3 rounded-full">
+                  <CheckCircle size={24} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-lg">Submission Review Required</h3>
+                  <p className="text-slate-400 text-sm">Review the work. Verify to finalize or undo to request changes.</p>
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => handleVerify(selectedProject, false)}
+                  className="bg-slate-700 hover:bg-slate-600 px-6 py-2 rounded-lg font-bold text-sm transition"
+                >
+                  Undo Submission
+                </button>
+                <button
+                  onClick={() => handleVerify(selectedProject, true)}
+                  className="bg-green-500 hover:bg-green-600 px-6 py-2 rounded-lg font-bold text-sm transition"
+                >
+                  Verify & Close
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* INSIGHTS */}
-        <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 shadow-sm flex flex-col justify-center">
-          <h3 className="text-sm font-bold uppercase tracking-wider mb-2">Value Insights:</h3>
-          <div className="mb-3">
-             <p className="font-semibold text-sm">Arsh Jenkins (Best Value):</p>
-             <p className="text-sm text-slate-600">Score 9, $13k.</p>
-          </div>
-          <div>
-             <p className="font-semibold text-sm">James Smith (Budget Option):</p>
-             <p className="text-sm text-slate-600">Score 8.2, $10k.</p>
-          </div>
-        </div>
       </div>
 
-      {/* BIDDERS TABLE CARED */}
-      <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm text-left align-middle">
-            <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase text-xs">
-              <tr>
-                <th className="px-5 py-4">Bidder</th>
-                <th className="px-5 py-4 text-center">Skills Match (%)</th>
-                <th className="px-5 py-4 text-center">Technical Score</th>
-                <th className="px-5 py-4 text-center">Bid Amount</th>
-                <th className="px-5 py-4 text-center">Timeline</th>
-                <th className="px-5 py-4 text-center">Value Score</th>
-                <th className="px-5 py-4 text-center">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {bidders.map((bidder, idx) => (
-                <tr key={idx} className={`border-b border-slate-100 hover:bg-slate-50 transition-colors ${selectedBidder === bidder.name ? 'bg-slate-100' : ''}`}>
-                  <td className="px-5 py-3 flex items-center gap-3">
-                    <img src={`https://i.pravatar.cc/150?u=${bidder.name.replace(' ', '')}`} alt={bidder.name} className="w-8 h-8 rounded-full bg-slate-200 border border-slate-300" />
-                    <span className="font-semibold text-slate-800">{bidder.name}</span>
-                  </td>
-                  <td className="px-5 py-3 text-center font-medium">{bidder.match}%</td>
-                  <td className="px-5 py-3 text-center">{bidder.score} / {bidder.outOf}</td>
-                  <td className="px-5 py-3 text-center">{bidder.amount}</td>
-                  <td className="px-5 py-3 text-center">{bidder.timeline}</td>
-                  <td className="px-5 py-3 text-center font-semibold text-slate-800">{bidder.valueScore}</td>
-                  <td className="px-5 py-3">
-                    <div className="flex items-center justify-center gap-2">
-                       <button className="px-3 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium rounded text-xs transition-colors">View Profile</button>
-                       <button className="px-3 py-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium rounded text-xs transition-colors">Shortlist</button>
-                       
-                       <div className="relative group">
-                         <button 
-                            onClick={() => handleSelect(bidder.name)}
-                            className="px-3 py-1 bg-white border border-slate-300 hover:border-slate-800 hover:bg-slate-800 hover:text-white text-slate-800 font-bold rounded text-xs transition-colors uppercase tracking-wide">
-                            ACCEPT BID
-                         </button>
-                         {/* Hover Tooltip for Accept */}
-                         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-max px-3 py-1.5 bg-black text-white text-xs font-bold rounded opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all whitespace-nowrap z-10 shadow-lg">
-                           **ACCEPT BID - Proceed to Contract
-                           <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-black"></div>
-                         </div>
-                       </div>
-                    </div>
-                    {bidder.bestValue && (
-                       <p className="text-center text-[10px] font-semibold text-slate-500 mt-1 uppercase">Highly Recommended (Best Value)</p>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      {/* Deadline Modal */}
+      {showDeadlineModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl space-y-6">
+            <div className="flex items-center gap-4 text-blue-600">
+              <Clock size={32} />
+              <h2 className="text-2xl font-black uppercase italic tracking-tighter">Set Project Deadline</h2>
+            </div>
 
-      {/* BOTTOM DOSSIER SECTION */}
-      <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm flex flex-col md:flex-row items-start md:items-center gap-6 mt-4">
-        <div className="p-3 bg-slate-600 rounded-xl flex-shrink-0">
-          <Folder size={48} className="text-white" fill="currentColor" fillOpacity={0.2} strokeWidth={1.5} />
-        </div>
-        
-        <div className="flex-1">
-          <h2 className="text-lg font-bold text-slate-800 mb-1">
-            Dossier & Acceptance for {selectedBidder} (Selected Bids)
-          </h2>
-          <p className="text-sm text-slate-600 leading-relaxed max-w-3xl">
-            Comprehensive text from foresaero, compresentor adipiscing elits, rend-level in comprehensive tws detailed table card. i.e: a multi-column detailed table, a-column table:finnn-column labives not om column table card, and very nore professional nor-seolsline dossiers. Enned Progress is no and replaced ink standard labens. Made with professional, non sensical free text.
-          </p>
-        </div>
-        
-        <div className="flex flex-col gap-2 w-full md:w-auto mt-4 md:mt-0">
-          <button className="w-full bg-[#009b4d] hover:bg-green-700 text-white font-bold py-2.5 px-6 rounded shadow-sm flex items-center justify-center gap-2 text-sm transition-colors border-2 border-green-700">
-             **CONFIRM ACCEPTANCE
-          </button>
-          <div className="flex gap-2">
-            <button className="flex-1 bg-[#009b4d] hover:bg-green-700 text-white font-bold py-2 px-3 rounded text-xs transition-colors flex items-center justify-center border-2 border-green-700">
-              **CONFIRM ACCEPTANCE
-            </button>
-            <button className="flex-1 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-semibold py-2 px-3 rounded text-xs transition-colors flex items-center justify-center">
-              View Dossier PDF
-            </button>
+            <p className="text-slate-500 text-sm">Setting a deadline enables the real-time profit/loss tracking system. Hired freelancer must submit before this time.</p>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-400 uppercase">Days from now</label>
+                <input
+                  type="number" min="0" max="365"
+                  value={deadlineDays}
+                  onChange={(e) => setDeadlineDays(e.target.value)}
+                  className="w-full text-2xl font-bold bg-slate-50 border-none rounded-2xl p-4 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-400 uppercase">Hours from now</label>
+                <input
+                  type="number" min="0" max="23"
+                  value={deadlineHours}
+                  onChange={(e) => setDeadlineHours(e.target.value)}
+                  className="w-full text-2xl font-bold bg-slate-50 border-none rounded-2xl p-4 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                />
+              </div>
+            </div>
+
+            <div className="bg-[#2D333B] p-6 rounded-[2.5rem] border border-slate-700 flex flex-col items-center shadow-inner">
+              <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4">Calculated Deadline Preview</p>
+              {(() => {
+                const d = new Date();
+                d.setDate(d.getDate() + parseInt(deadlineDays || 0));
+                d.setHours(d.getHours() + parseInt(deadlineHours || 0));
+                return <CircularTimer deadline={d.toISOString()} />;
+              })()}
+            </div>
+
+            <div className="flex gap-4 pt-4">
+              <button
+                onClick={() => setShowDeadlineModal(false)}
+                className="flex-1 py-4 rounded-2xl font-bold text-slate-400 hover:bg-slate-50 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmHire}
+                className="flex-[2] bg-blue-600 py-4 rounded-2xl font-black text-white shadow-lg shadow-blue-200 hover:bg-blue-700 transition flex items-center justify-center gap-2"
+              >
+                <CheckCircle size={20} /> Start Project
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
     </div>
   );
-};
-
-export default BidManagerClient;
+}

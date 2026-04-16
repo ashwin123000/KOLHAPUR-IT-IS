@@ -1,3 +1,0 @@
-C:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/build/CMakeFiles/FreelancePlatform.dir
-C:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/build/CMakeFiles/edit_cache.dir
-C:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/build/CMakeFiles/rebuild_cache.dir

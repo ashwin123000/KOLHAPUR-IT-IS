@@ -1,6 +1,9 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 # CPP-ACSES-
 =======
+=======
+>>>>>>> 4dba0c3bcb06930478a58a3ff70b912c733a4611
 # 🚀 Freelancer Marketplace System - Complete Documentation
 
 A **production-level**, **full-stack freelance marketplace** system with:
@@ -664,4 +667,7 @@ The backend relies on `vcpkg` for seamless C++ dependency management.
 - **Register as Client**: Post a project with a budget.
 - **Freelancer actions**: Browse jobs, attempt to bid over the budget (watch it get auto-rejected).
 - **Client actions**: View recommendations sorted by the OOP Intelligence Engine. Review Trust metrics.
+<<<<<<< HEAD
 >>>>>>> 54b464e (CPP-ACSES-)
+=======
+>>>>>>> 4dba0c3bcb06930478a58a3ff70b912c733a4611

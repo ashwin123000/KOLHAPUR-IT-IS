@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Job Analyzer — Smart Career Intelligence Platform</title>
+  <meta name="description" content="AI-powered freelance intelligence platform. Analyze jobs, improve resumes, score proposals, detect risky clients, and close skill gaps — all in one place." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- APP SHELL -->
+  <div id="app" class="app">
+
+    <!-- SIDEBAR -->
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          <div class="logo-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+              <path d="M2 17l10 5 10-5"/>
+              <path d="M2 12l10 5 10-5"/>
+            </svg>
+          </div>
+          <div class="logo-text">
+            <span class="logo-name">AI Analyzer</span>
+            <span class="logo-sub">Career Intelligence</span>
+          </div>
+        </div>
+        <button id="themeToggle" class="theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+          <svg id="themeIconSun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="hidden">
+            <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+            <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+          </svg>
+          <svg id="themeIconMoon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- TOOLS SECTION -->
+      <div class="sidebar-section">
+        <span class="sidebar-label">AI TOOLS</span>
+        <nav id="toolNav" class="tool-nav">
+          <button class="tool-nav-item active" data-tool="job-analyzer" id="nav-job-analyzer">
+            <div class="tool-nav-icon" style="background: linear-gradient(135deg,#22c55e,#16a34a)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/><path d="M11 8v6M8 11h6"/></svg>
+            </div>
+            <div class="tool-nav-info">
+              <span class="tool-nav-name">Job Analyzer</span>
+              <span class="tool-nav-desc">Decode any job post</span>
+            </div>
+            <div class="tool-badge">AI</div>
+          </button>
+          <button class="tool-nav-item" data-tool="resume-improver" id="nav-resume-improver">
+            <div class="tool-nav-icon" style="background: linear-gradient(135deg,#6366f1,#4f46e5)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+            </div>
+            <div class="tool-nav-info">
+              <span class="tool-nav-name">Resume Improver</span>
+              <span class="tool-nav-desc">ATS-ready optimization</span>
+            </div>
+            <div class="tool-badge">AI</div>
+          </button>
+          <button class="tool-nav-item" data-tool="proposal-scorer" id="nav-proposal-scorer">
+            <div class="tool-nav-icon" style="background: linear-gradient(135deg,#f59e0b,#d97706)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+            </div>
+            <div class="tool-nav-info">
+              <span class="tool-nav-name">Proposal Scorer</span>
+              <span class="tool-nav-desc">Win more contracts</span>
+            </div>
+            <div class="tool-badge">AI</div>
+          </button>
+          <button class="tool-nav-item" data-tool="client-risk" id="nav-client-risk">
+            <div class="tool-nav-icon" style="background: linear-gradient(135deg,#ef4444,#dc2626)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            </div>
+            <div class="tool-nav-info">
+              <span class="tool-nav-name">Client Risk Detector</span>
+              <span class="tool-nav-desc">Spot red flags early</span>
+            </div>
+            <div class="tool-badge new">NEW</div>
+          </button>
+          <button class="tool-nav-item" data-tool="skill-gap" id="nav-skill-gap">
+            <div class="tool-nav-icon" style="background: linear-gradient(135deg,#8b5cf6,#7c3aed)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            </div>
+            <div class="tool-nav-info">
+              <span class="tool-nav-name">Skill Gap Analyzer</span>
+              <span class="tool-nav-desc">Level up your skills</span>
+            </div>
+            <div class="tool-badge">AI</div>
+          </button>
+        </nav>
+      </div>
+
+      <!-- RECENT HISTORY -->
+      <div class="sidebar-section">
+        <div class="sidebar-label-row">
+          <span class="sidebar-label">RECENT HISTORY</span>
+          <button id="clearHistory" class="clear-btn" title="Clear all history">Clear</button>
+        </div>
+        <div id="historyList" class="history-list">
+          <div class="history-empty">No recent queries yet</div>
+        </div>
+      </div>
+
+      <!-- SIDEBAR FOOTER -->
+      <div class="sidebar-footer">
+        <div class="sidebar-stats">
+          <div class="stat-pill"><span class="stat-num" id="statAnalyses">0</span><span class="stat-lbl">Analyses</span></div>
+          <div class="stat-pill"><span class="stat-num" id="statScore">—</span><span class="stat-lbl">Avg Score</span></div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main id="mainContent" class="main-content">
+
+      <!-- ===================== HOME / TOOLS VIEW ===================== -->
+      <section id="homeView" class="home-view view-active">
+        <div class="home-hero">
+          <div class="hero-badge">
+            <div class="hero-badge-dot"></div>
+            <span>AI System Online</span>
+          </div>
+          <h1 class="hero-title">Your <span class="gradient-text">Career Intelligence</span><br/>Command Center</h1>
+          <p class="hero-sub">Analyze jobs, improve resumes, score proposals, and detect risky clients — powered by advanced AI simulation engine.</p>
+        </div>
+
+        <!-- QUICK CHIPS -->
+        <div class="chips-section">
+          <span class="chips-label">Quick Actions</span>
+          <div class="chips-row" id="quickChips">
+            <button class="chip" data-tool="job-analyzer" data-prompt="Analyze this job post for red flags, requirements, and my chances of landing it as a React developer with 3 years experience.">🔍 Analyze this job post</button>
+            <button class="chip" data-tool="resume-improver" data-prompt="I need help improving my resume. I have 3 years of React and Node.js experience but keep getting rejected.">📄 Improve my resume</button>
+            <button class="chip" data-tool="job-analyzer" data-prompt="Why am I not getting hired? I apply to 20 jobs a week but rarely hear back.">🤔 Why am I not getting hired?</button>
+            <button class="chip" data-tool="proposal-scorer" data-prompt="Write me a winning proposal for a React developer role on a SaaS startup project.">✍️ Write a winning proposal</button>
+            <button class="chip" data-tool="skill-gap" data-prompt="I'm a React developer. What skills am I missing to land senior-level jobs in 2025?">📊 What skills am I missing?</button>
+          </div>
+        </div>
+
+        <!-- TOOLS GRID -->
+        <div class="tools-grid" id="toolsGrid">
+          <div class="tool-card" data-tool="job-analyzer" id="card-job-analyzer">
+            <div class="tool-card-glow" style="--glow:#22c55e"></div>
+            <div class="tool-card-header">
+              <div class="tool-card-icon" style="background: linear-gradient(135deg,#22c55e,#16a34a)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+              </div>
+              <span class="tool-card-badge">Most Used</span>
+            </div>
+            <h3 class="tool-card-title">AI Job Analyzer</h3>
+            <p class="tool-card-desc">Paste any job description and get instant AI analysis — requirements breakdown, salary estimate, red flags, and your match score.</p>
+            <div class="tool-card-features">
+              <span>✓ Requirements breakdown</span>
+              <span>✓ Red flag detection</span>
+              <span>✓ Match score</span>
+            </div>
+            <button class="tool-card-btn" data-tool="job-analyzer">Start Analysis →</button>
+          </div>
+
+          <div class="tool-card" data-tool="resume-improver" id="card-resume-improver">
+            <div class="tool-card-glow" style="--glow:#6366f1"></div>
+            <div class="tool-card-header">
+              <div class="tool-card-icon" style="background: linear-gradient(135deg,#6366f1,#4f46e5)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+              </div>
+              <span class="tool-card-badge" style="background:rgba(99,102,241,0.15);color:#818cf8">ATS Ready</span>
+            </div>
+            <h3 class="tool-card-title">Resume Improver</h3>
+            <p class="tool-card-desc">Transform your resume into an ATS-crushing, recruiter-magnet document. Get section-by-section feedback and rewrites.</p>
+            <div class="tool-card-features">
+              <span>✓ ATS optimization</span>
+              <span>✓ Impact metrics</span>
+              <span>✓ Section rewrite</span>
+            </div>
+            <button class="tool-card-btn" style="background:linear-gradient(135deg,#6366f1,#4f46e5)" data-tool="resume-improver">Improve Resume →</button>
+          </div>
+
+          <div class="tool-card" data-tool="proposal-scorer" id="card-proposal-scorer">
+            <div class="tool-card-glow" style="--glow:#f59e0b"></div>
+            <div class="tool-card-header">
+              <div class="tool-card-icon" style="background: linear-gradient(135deg,#f59e0b,#d97706)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+              </div>
+              <span class="tool-card-badge" style="background:rgba(245,158,11,0.15);color:#fbbf24">Win Rate+</span>
+            </div>
+            <h3 class="tool-card-title">Proposal Scorer</h3>
+            <p class="tool-card-desc">Score your proposal against winning templates. Get rewrite suggestions, tone analysis, and a predicted success rate.</p>
+            <div class="tool-card-features">
+              <span>✓ Win rate prediction</span>
+              <span>✓ Tone analysis</span>
+              <span>✓ Auto rewrite</span>
+            </div>
+            <button class="tool-card-btn" style="background:linear-gradient(135deg,#f59e0b,#d97706)" data-tool="proposal-scorer">Score Proposal →</button>
+          </div>
+
+          <div class="tool-card" data-tool="client-risk" id="card-client-risk">
+            <div class="tool-card-glow" style="--glow:#ef4444"></div>
+            <div class="tool-card-header">
+              <div class="tool-card-icon" style="background: linear-gradient(135deg,#ef4444,#dc2626)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              </div>
+              <span class="tool-card-badge" style="background:rgba(239,68,68,0.15);color:#f87171">NEW</span>
+            </div>
+            <h3 class="tool-card-title">Client Risk Detector</h3>
+            <p class="tool-card-desc">Before you bid — analyze client posts for vague scope, low budgets, scope creep risk, and payment red flags.</p>
+            <div class="tool-card-features">
+              <span>✓ Scope analysis</span>
+              <span>✓ Payment risk score</span>
+              <span>✓ Negotiation tips</span>
+            </div>
+            <button class="tool-card-btn" style="background:linear-gradient(135deg,#ef4444,#dc2626)" data-tool="client-risk">Detect Risks →</button>
+          </div>
+
+          <div class="tool-card" data-tool="skill-gap" id="card-skill-gap">
+            <div class="tool-card-glow" style="--glow:#8b5cf6"></div>
+            <div class="tool-card-header">
+              <div class="tool-card-icon" style="background: linear-gradient(135deg,#8b5cf6,#7c3aed)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+              </div>
+              <span class="tool-card-badge" style="background:rgba(139,92,246,0.15);color:#a78bfa">Growth</span>
+            </div>
+            <h3 class="tool-card-title">Skill Gap Analyzer</h3>
+            <p class="tool-card-desc">Compare your skillset to market demand. Get a personalized learning roadmap with top resources to close skill gaps fast.</p>
+            <div class="tool-card-features">
+              <span>✓ Market comparison</span>
+              <span>✓ Learning roadmap</span>
+              <span>✓ Salary impact</span>
+            </div>
+            <button class="tool-card-btn" style="background:linear-gradient(135deg,#8b5cf6,#7c3aed)" data-tool="skill-gap">Analyze Skills →</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================== CHAT VIEW ===================== -->
+      <section id="chatView" class="chat-view">
+        <!-- CHAT HEADER -->
+        <div class="chat-header">
+          <button id="backBtn" class="back-btn" aria-label="Back to tools">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+            <span>Tools</span>
+          </button>
+          <div class="chat-header-info">
+            <div class="chat-header-icon" id="chatHeaderIcon"></div>
+            <div>
+              <div class="chat-header-title" id="chatHeaderTitle">AI Job Analyzer</div>
+              <div class="chat-header-status"><div class="status-dot"></div><span>AI Online · GPT-4 level</span></div>
+            </div>
+          </div>
+          <!-- MODE TABS -->
+          <div class="chat-tabs" id="chatTabs">
+            <button class="chat-tab active" data-tab="analyze">Analyze</button>
+            <button class="chat-tab" data-tab="improve">Improve</button>
+            <button class="chat-tab" data-tab="rewrite">Rewrite</button>
+          </div>
+        </div>
+
+        <!-- CHAT BODY -->
+        <div class="chat-body" id="chatBody">
+          <!-- WELCOME MESSAGE -->
+          <div class="chat-welcome" id="chatWelcome">
+            <div class="welcome-avatar">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"/><path d="M12 6v6l4 2"/></svg>
+            </div>
+            <h3 id="welcomeTitle">Ready to analyze your job post</h3>
+            <p id="welcomeDesc">Paste any job description below and I'll give you a full breakdown including match score, red flags, salary estimate, and personalized recommendations.</p>
+            <div class="welcome-chips" id="welcomeChips">
+              <button class="welcome-chip">Paste a sample job →</button>
+              <button class="welcome-chip">Analyze my target role →</button>
+              <button class="welcome-chip">Check market rate →</button>
+            </div>
+          </div>
+          <!-- MESSAGES WILL BE INJECTED HERE -->
+          <div id="messagesList" class="messages-list"></div>
+        </div>
+
+        <!-- CHAT INPUT -->
+        <div class="chat-input-area">
+          <div class="chat-input-wrapper">
+            <textarea
+              id="chatInput"
+              class="chat-input"
+              placeholder="Paste your job description here..."
+              rows="1"
+              aria-label="Chat input"
+            ></textarea>
+            <div class="chat-input-actions">
+              <button id="insertSampleBtn" class="input-action-btn" title="Insert sample">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+              </button>
+              <button id="sendBtn" class="send-btn" aria-label="Send message">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="input-hint">Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for new line</div>
+        </div>
+      </section>
+    </main>
+
+    <!-- ===================== INSIGHTS PANEL ===================== -->
+    <aside id="insightsPanel" class="insights-panel">
+      <div class="insights-header">
+        <h3 class="insights-title">AI Insights</h3>
+        <div class="insights-live"><div class="live-dot"></div><span>Live</span></div>
+      </div>
+
+      <!-- SCORE METER -->
+      <div class="insight-card" id="scoreCard">
+        <div class="insight-card-label">Overall Score</div>
+        <div class="score-circle-wrapper">
+          <svg class="score-circle-svg" viewBox="0 0 120 120">
+            <circle class="score-track" cx="60" cy="60" r="50" />
+            <circle class="score-fill" id="scoreFill" cx="60" cy="60" r="50"
+              stroke-dasharray="314"
+              stroke-dashoffset="314"
+              style="--score-color: #22c55e"
+            />
+          </svg>
+          <div class="score-center">
+            <span class="score-value" id="scoreValue">—</span>
+            <span class="score-label" id="scoreLabel">Analyzing...</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- RISK LEVEL -->
+      <div class="insight-card">
+        <div class="insight-card-label">Risk Level</div>
+        <div class="risk-display" id="riskDisplay">
+          <div class="risk-badge risk-unknown" id="riskBadge">Awaiting Input</div>
+          <div class="risk-bar-track"><div class="risk-bar-fill" id="riskBarFill" style="width:0%;background:#6b7280"></div></div>
+        </div>
+      </div>
+
+      <!-- MATCH PERCENTAGE -->
+      <div class="insight-card">
+        <div class="insight-card-label">Profile Match</div>
+        <div class="match-row">
+          <div class="match-label" id="matchLabel">—</div>
+          <div class="match-bar-track"><div class="match-bar-fill" id="matchBarFill" style="width:0%"></div></div>
+        </div>
+      </div>
+
+      <!-- CONFIDENCE -->
+      <div class="insight-card">
+        <div class="insight-card-label">AI Confidence</div>
+        <div class="confidence-row" id="confidenceRow">
+          <div class="conf-dot conf-empty"></div><div class="conf-dot conf-empty"></div>
+          <div class="conf-dot conf-empty"></div><div class="conf-dot conf-empty"></div>
+          <div class="conf-dot conf-empty"></div>
+          <span class="conf-label" id="confLabel">—</span>
+        </div>
+      </div>
+
+      <!-- MISSING SKILLS -->
+      <div class="insight-card">
+        <div class="insight-card-label">Missing Skills</div>
+        <div class="skills-list" id="skillsList">
+          <div class="skills-empty">Run an analysis to see skill gaps</div>
+        </div>
+      </div>
+
+      <!-- QUICK TIPS -->
+      <div class="insight-card" id="tipsCard" style="display:none">
+        <div class="insight-card-label">Quick Tips</div>
+        <div class="tips-list" id="tipsList"></div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- MOBILE OVERLAY -->
+  <div id="mobileOverlay" class="mobile-overlay" style="display:none"></div>
+
+  <!-- TOAST -->
+  <div id="toast" class="toast" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

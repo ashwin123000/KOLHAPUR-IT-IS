@@ -1,6 +1,6 @@
-import React from 'react';
-import { Search, Bell, User } from 'lucide-react';
+import { Search, User } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import NotificationPanel from './NotificationPanel';
 
 export default function Navbar({ role }) {
   const navigate = useNavigate();
@@ -25,14 +25,8 @@ export default function Navbar({ role }) {
       </div>
 
       {/* Action Segment */}
-      <div className="flex items-center gap-6">
-        <button className="relative text-slate-500 hover:text-indigo-600 transition">
-          <Bell size={20} />
-          <span className="absolute -top-1 -right-1 flex h-3 w-3">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
-          </span>
-        </button>
+      <div className="flex items-center gap-4 md:gap-6">
+        <NotificationPanel userId={localStorage.getItem('userId') || ''} />
 
         <div className="h-6 w-px bg-slate-200"></div>
 

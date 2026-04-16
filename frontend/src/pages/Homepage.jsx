@@ -245,7 +245,7 @@ const Homepage = () => {
           <p className="text-xl text-indigo-100 mb-8">
             Join thousands of successful freelancers. Start earning on day one.
           </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
+<div className="flex flex-col sm:flex-row gap-4 justify-center">
             <button
               onClick={() => navigate("/signup-freelancer")}
               className="px-8 py-4 bg-white text-indigo-600 font-bold rounded-lg hover:shadow-xl hover:shadow-indigo-500/30 transition transform hover:scale-105"
@@ -256,7 +256,13 @@ const Homepage = () => {
               onClick={() => navigate("/login-freelancer")}
               className="px-8 py-4 border-2 border-white text-white font-bold rounded-lg hover:bg-white/10 transition"
             >
-              Sign In
+              Freelancer Sign In
+            </button>
+            <button
+              onClick={() => navigate("/login-client")}
+              className="px-8 py-4 bg-emerald-500 text-white font-bold rounded-lg hover:bg-emerald-400 transition transform hover:scale-105"
+            >
+              Client Portal →
             </button>
           </div>
         </div>
@@ -311,6 +317,7 @@ const Homepage = () => {
   );
 };
 
+// Defined before export to ensure it mounts properly
 const FeatureCard = ({ icon, title, desc }) => (
   <div className="bg-slate-800 bg-opacity-50 p-8 rounded-xl border border-slate-700 hover:border-indigo-500 transition">
     <div className="text-indigo-400 mb-4">{icon}</div>

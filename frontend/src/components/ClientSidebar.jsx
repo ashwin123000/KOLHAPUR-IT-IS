@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, FolderOpen, Search, Users, ClipboardCheck, FileText, BarChart2, Settings } from 'lucide-react';
+import { LayoutDashboard, FolderOpen, Search, Monitor, Settings } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
 export default function ClientSidebar() {
@@ -30,11 +30,8 @@ export default function ClientSidebar() {
         <button onClick={() => navigate('/recommendations/project-client')} className={getButtonClass('/recommendations/project-client')}>
            <Search size={18}/> Find Talent
         </button>
-        <button onClick={() => navigate('/client-payouts')} className={getButtonClass('/client-payouts')}>
-           <Users size={18}/> Payouts
-        </button>
-        <button onClick={() => navigate('/client-manage-bids')} className={getButtonClass('/client-manage-bids')}>
-           <FileText size={18}/> Manage Bids
+        <button onClick={() => navigate('/vm-analysis')} className={getButtonClass('/vm-analysis')}>
+           <Monitor size={18}/> VM Analysis
         </button>
         <button className={`w-full text-left px-4 py-3 rounded-lg text-slate-600 hover:bg-slate-50 font-medium flex items-center gap-3`}>
            <Settings size={18}/> Settings
