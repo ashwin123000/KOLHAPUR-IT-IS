@@ -6,7 +6,8 @@ import {
   CheckCircle, Briefcase, Clock, Star, AlertCircle, TrendingUp, AlertTriangle, 
   ExternalLink, ArrowUpRight, ArrowDownRight, Zap, Target, Plus, RefreshCw
 } from 'lucide-react';
-import { statsAPI, projectsAPI } from '../services/api';
+import { statsAPI, projectsAPI, intelAPI } from '../services/api';
+import { realtimeClient } from '../services/realtime';
 import CircularTimer from '../components/CircularTimer';
 import CountdownTimer from '../components/CountdownTimer';
 
@@ -24,6 +25,7 @@ const FreelancerDashboard = () => {
   const [loading,  setLoading]  = useState(true);
   const [ratingRefreshing, setRatingRefreshing] = useState(false);
   const [chartRange, setChartRange] = useState(7);
+  const [trendingSkills, setTrendingSkills] = useState([]); // Fix #4: real velocity
 
   // ── Defined with useCallback BEFORE useEffect so the ref is stable ──
   const fetchRatingOnly = useCallback(async () => {
@@ -98,28 +100,24 @@ const FreelancerDashboard = () => {
       .finally(() => setLoading(false));
   }, [userId]);
 
+  // Fetch Market Pulse (skill velocity) — Fix #4: real velocity, not COUNT(*)
+  useEffect(() => {
+    intelAPI.getPulse()
+      .then(res => { if (res.data?.trending) setTrendingSkills(res.data.trending); })
+      .catch(() => {}); // non-critical — fails silently
+  }, []);
+
   useEffect(() => {
     if (!userId) { setLoading(false); return; }
     fetchData();
 
-    // Poll rating every 10s as fallback
-    const interval = setInterval(fetchRatingOnly, 10_000);
-
-    // WebSocket for real-time rating updates
-    let ws = null;
-    try {
-      ws = new WebSocket('ws://127.0.0.1:8000/ws');
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === 'rating_update' && msg.freelancerId === userId) {
-            setTimeout(fetchRatingOnly, 500);
-          }
-        } catch (_) {}
-      };
-      ws.onerror = () => {};
-      ws.onclose = () => {};
-    } catch (_) {}
+    const unsubscribeRatings = realtimeClient.subscribe('rating_update', (msg) => {
+      if (!msg.freelancerId || msg.freelancerId === userId) setTimeout(fetchRatingOnly, 500);
+    });
+    const unsubscribeUsers = realtimeClient.subscribe('USER_UPDATE', (msg) => {
+      if (!msg.user_id || msg.user_id === userId || msg.data?.id === userId) fetchData();
+    });
+    const unsubscribeMatches = realtimeClient.subscribe('JOB_MATCH_UPDATE', () => fetchData());
 
     const onRatingUpdated = () => {
       setTimeout(fetchRatingOnly, 1500);
@@ -127,9 +125,10 @@ const FreelancerDashboard = () => {
     window.addEventListener('ratingUpdated', onRatingUpdated);
 
     return () => {
-      clearInterval(interval);
       window.removeEventListener('ratingUpdated', onRatingUpdated);
-      if (ws) ws.close();
+      unsubscribeRatings();
+      unsubscribeUsers();
+      unsubscribeMatches();
     };
   }, [userId, fetchData, fetchRatingOnly]);
   const handleSubmitWork = async (projectId) => {
@@ -394,6 +393,84 @@ const FreelancerDashboard = () => {
                 </AreaChart>
               </ResponsiveContainer>
             </div>
+          </div>
+
+          {/* ⚡ Market Pulse — Real Skill Velocity (Fix #4) */}
+          <div style={{
+            background: 'white',
+            borderRadius: '2.5rem',
+            padding: 32,
+            border: '1px solid #f1f5f9',
+            boxShadow: '0 2px 16px rgba(0,0,0,0.04)',
+            marginBottom: 24,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+              <div>
+                <h3 style={{ fontSize: 18, fontWeight: 900, color: '#0f172a', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Zap size={18} color="#0f766e" /> Market Pulse
+                </h3>
+                <p style={{ fontSize: 12, color: '#94a3b8' }}>
+                  Velocity = jobs posted this week vs last week. Real demand signal.
+                </p>
+              </div>
+              <span style={{
+                fontSize: 10, fontWeight: 700, padding: '5px 12px', borderRadius: 20,
+                background: '#f0fdf9', color: '#0f766e', border: '1px solid #99f6e4',
+                textTransform: 'uppercase', letterSpacing: '0.08em',
+              }}>Live • 30m cache</span>
+            </div>
+
+            {trendingSkills.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '32px 0', color: '#94a3b8' }}>
+                <p style={{ fontSize: 13 }}>Pulse data loading or not enough job activity yet.</p>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 14 }}>
+                {trendingSkills.map((item, i) => {
+                  const color = item.trend === 'high' ? '#d97706'
+                    : item.trend === 'medium' ? '#7c3aed'
+                    : item.trend === 'declining' ? '#dc2626'
+                    : '#64748b';
+                  const bg = item.trend === 'high' ? '#fffbeb'
+                    : item.trend === 'medium' ? '#faf5ff'
+                    : item.trend === 'declining' ? '#fff1f2'
+                    : '#f8fafc';
+                  const pct = Math.min(100, Math.abs(item.velocity_int || 0) * 5 + 10);
+                  
+                  return (
+                    <div key={i} style={{
+                      background: bg,
+                      borderRadius: 16,
+                      padding: '16px 18px',
+                      border: `1px solid ${color}30`,
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                        <span style={{ fontSize: 14, fontWeight: 800, color: '#1e293b' }}>{item.skill}</span>
+                        <span style={{
+                          fontSize: 12, fontWeight: 900, color,
+                          background: `${color}18`,
+                          padding: '3px 8px', borderRadius: 8,
+                        }}>
+                          {item.velocity}
+                        </span>
+                      </div>
+                      <div style={{ width: '100%', background: '#e2e8f0', borderRadius: 4, height: 5, marginBottom: 8 }}>
+                        <div style={{
+                          height: 5, borderRadius: 4,
+                          width: `${pct}%`,
+                          background: color,
+                          transition: 'width 0.8s ease',
+                        }} />
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#64748b', fontWeight: 500 }}>
+                        <span>This week: {item.current}</span>
+                        <span>Last vs: {item.previous}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Activity Heatmap */}

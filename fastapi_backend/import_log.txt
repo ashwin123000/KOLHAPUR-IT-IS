@@ -1,0 +1,4 @@
+WARNING:main:\u26a0\ufe0f  Redis unavailable (optional): TimeoutError
+WARNING:main:\u26a0\ufe0f  Database migrations deferred: no such table: main.users
+WARNING:main:Failed to init OpenAI client: The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable
+success

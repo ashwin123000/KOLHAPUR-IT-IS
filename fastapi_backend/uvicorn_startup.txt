@@ -1,0 +1,12 @@
+WARNING:main:\u26a0\ufe0f  Redis unavailable (optional): TimeoutError
+WARNING:main:\u26a0\ufe0f  Database migrations deferred: no such table: main.users
+WARNING:main:Failed to init OpenAI client: The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable
+INFO:     Started server process [7156]
+INFO:     Waiting for application startup.
+INFO:main:\u2705 SQLite connected with WAL mode.
+INFO:main:\u2705 Database initialized
+INFO:     Application startup complete.
+ERROR:    [Errno 10048] error while attempting to bind on address ('127.0.0.1', 8000): [winerror 10048] only one usage of each socket address (protocol/network address/port) is normally permitted
+INFO:     Waiting for application shutdown.
+INFO:main:Database connection closed.
+INFO:     Application shutdown complete.

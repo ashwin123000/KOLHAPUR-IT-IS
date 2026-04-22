@@ -9,26 +9,16 @@ import {
 import { projectsAPI, applyAPI, ratingsAPI } from '../services/api';
 import ProNavbar from '../components/ProNavbar';
 
-/* ─── Dummy AI enrichment data ──────────────────────────────── */
-const DUMMY_APPLICANTS = [
-  { name: 'Aarav Sharma',   tagline: 'Python Dev',        exp: '1+ year',  ai: 87, gaps: ['Docker','System Design'], status: 'Under Review', risk: 'Low',    avatar: 'AS', skills: 'Python, ML, FastAPI' },
-  { name: 'Remala Sharma',  tagline: 'Graphic Designer',  exp: '2+ year',  ai: 72, gaps: ['Figma Adv'],             status: 'Shortlisted',  risk: 'Low',    avatar: 'RS', skills: 'Figma, Adobe XD' },
-  { name: 'Akira Rivi',     tagline: 'Content Writer',    exp: '2+ year',  ai: 72, gaps: [],                        status: 'Shortlisted',  risk: 'Low',    avatar: 'AR', skills: 'Copywriting, SEO' },
-  { name: 'Asrar Sharma',   tagline: 'Content Writer',    exp: '1+ year',  ai: 55, gaps: ['Docker'],                status: 'Contacted',    risk: 'Medium', avatar: 'AS', skills: 'Technical Writing' },
-  { name: 'Aziz Akhtar',    tagline: 'Graphic Designer',  exp: '2+ year',  ai: 55, gaps: ['Vc-516'],               status: 'Contacted',    risk: 'Medium', avatar: 'AA', skills: 'Illustrator, Sketch' },
-  { name: 'Arav Sharma',    tagline: 'Python Dev',        exp: '2+ year',  ai: 55, gaps: ['Docker'],               status: 'Contacted',    risk: 'Medium', avatar: 'AS', skills: 'Python, Django' },
-  { name: 'Maria Chen',     tagline: 'React Developer',   exp: '3+ years', ai: 91, gaps: [],                        status: 'Shortlisted',  risk: 'Low',    avatar: 'MC', skills: 'React, TypeScript, Node' },
-  { name: 'James Okafor',   tagline: 'UX/UI Designer',   exp: '2+ year',  ai: 68, gaps: ['Prototyping'],           status: 'Under Review', risk: 'Low',    avatar: 'JO', skills: 'Figma, UX Research' },
-  { name: 'Priya Nair',     tagline: 'Data Analyst',     exp: '1+ year',  ai: 80, gaps: ['Tableau'],              status: 'Shortlisted',  risk: 'Low',    avatar: 'PN', skills: 'Python, SQL, Power BI' },
-  { name: 'Leo Fernandez',  tagline: 'SEO Specialist',   exp: '2+ year',  ai: 63, gaps: ['Ahrefs'],               status: 'Contacted',    risk: 'Medium', avatar: 'LF', skills: 'SEO, Google Ads' },
-];
-
-const SKILL_GAPS_SUMMARY = [
-  { skill: 'Kubernetes', pct: 67 },
-  { skill: 'React',      pct: 48 },
-  { skill: 'Docker',     pct: 35 },
-  { skill: 'Figma Adv',  pct: 22 },
-];
+/* ─── AI enrichment / metadata (kept as defaults if real data missing) ─── */
+const DEFAULT_AI_ENRICHMENT = {
+  tagline: 'Professional Freelancer',
+  exp: 'N/A',
+  ai: 0,
+  gaps: [],
+  status: 'Under Review',
+  risk: 'Unknown',
+  avatar: '?',
+};
 
 const TYPE_OPTIONS = ['Full-time', 'Contract', 'Internship', 'Part-time'];
 
@@ -250,27 +240,21 @@ function CandidateRow({ app, dummy, onHire, onReject, hiring, rejecting, selecte
               <div>
                 <p className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wide">AI Insights</p>
                 <ul className="space-y-1">
-                  <li className="text-sm text-green-700 flex items-center gap-1"><CheckCircle2 size={13}/> Strong {dummy?.tagline || 'skill'} match</li>
-                  <li className="text-sm text-green-700 flex items-center gap-1"><CheckCircle2 size={13}/> Relevant ML Experience</li>
-                  <li className="text-sm text-amber-600 flex items-center gap-1"><AlertCircle size={13}/> Communication clarity could be improved</li>
+                  <li className="text-sm text-slate-700 flex items-center gap-1">
+                    <CheckCircle2 size={13} className="text-emerald-500" /> Matches {app.requiredSkills?.length || 0} required skills
+                  </li>
+                  <li className="text-sm text-slate-400 italic">Advanced AI insights will appear after analysis.</li>
                 </ul>
               </div>
               <div>
                 <p className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wide">Skill Gaps</p>
                 <div className="flex gap-2 flex-wrap">
-                  {(dummy?.gaps || ['None identified']).map(g => (
-                    <span key={g} className="text-xs bg-white border border-gray-200 text-gray-600 px-2 py-1 rounded-lg">{g}</span>
-                  ))}
+                  <span className="text-xs text-slate-400 italic">No gaps identified yet.</span>
                 </div>
               </div>
               <div>
                 <p className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wide">Risk Level</p>
-                <span className={`text-sm font-semibold ${dummy?.risk === 'Low' ? 'text-green-600' : 'text-amber-600'}`}>
-                  {dummy?.risk || 'Low'}
-                </span>
-                {dummy?.risk === 'Medium' && (
-                  <p className="text-xs text-gray-500 mt-1">Similar resume detected across profiles.</p>
-                )}
+                <span className="text-sm font-semibold text-emerald-600">Low Risk</span>
               </div>
             </div>
             <div className="flex gap-3 mt-4">
@@ -292,13 +276,9 @@ function CandidateRow({ app, dummy, onHire, onReject, hiring, rejecting, selecte
 function ApplicationsView({ project, applications, onBack, onHire, onReject, hiringId, rejectingId, actionMsg, hiredFreelancerId, onCompleteClick }) {
   const [selectedIds, setSelectedIds] = useState([]);
   const pending = applications.filter(a => a.status === 'pending');
-  const avgScore = Math.round(DUMMY_APPLICANTS.slice(0, applications.length || 5).reduce((s, a) => s + a.ai, 0) / Math.max(applications.length, 5));
-
-  const toggleSelect = (id) => setSelectedIds(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
-
-  const enriched = applications.map((app, i) => ({
+  const enriched = applications.map((app) => ({
     app,
-    dummy: DUMMY_APPLICANTS[i % DUMMY_APPLICANTS.length],
+    dummy: DEFAULT_AI_ENRICHMENT,
   }));
 
   return (
@@ -354,24 +334,17 @@ function ApplicationsView({ project, applications, onBack, onHire, onReject, hir
             </thead>
             <tbody>
               {enriched.length === 0 ? (
-                /* Show dummy rows if no real apps yet */
-                DUMMY_APPLICANTS.map((dummy, i) => (
-                  <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
-                    <td className="px-3 py-3"><Square size={16} className="text-gray-300"/></td>
-                    <td className="px-3 py-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-green-400 to-emerald-600 flex items-center justify-center text-white text-xs font-bold">{dummy.avatar}</div>
-                        <div><p className="font-semibold text-gray-900 text-sm">{dummy.name}</p><p className="text-xs text-gray-400">{dummy.name}</p></div>
+                <tr>
+                  <td colSpan={8} className="px-6 py-20 text-center">
+                    <div className="flex flex-col items-center gap-3">
+                      <Users size={40} className="text-slate-200" />
+                      <div>
+                        <p className="text-slate-500 font-bold">No applications yet</p>
+                        <p className="text-slate-400 text-xs mt-1">When freelancers apply, they will appear here with AI insights.</p>
                       </div>
-                    </td>
-                    <td className="px-3 py-3"><p className="text-sm text-gray-800">{dummy.tagline}</p>{dummy.gaps.length > 0 && <span className="text-xs bg-amber-50 text-amber-600 px-1.5 py-0.5 rounded-full">Minimal Gaps</span>}</td>
-                    <td className="px-3 py-3 text-sm text-gray-600">{dummy.exp}</td>
-                    <td className="px-3 py-3"><span className="font-bold text-sm" style={{ color: aiColor(dummy.ai) }}>{dummy.ai}</span></td>
-                    <td className="px-3 py-3">{dummy.gaps.length > 0 ? dummy.gaps.map(g => <span key={g} className="text-xs bg-red-50 text-red-500 px-1.5 py-0.5 rounded-full mr-1">{g}</span>) : <span className="text-xs text-green-600">✓ Strong</span>}</td>
-                    <td className="px-3 py-3"><span className={`text-xs font-semibold px-2 py-1 rounded-full ${statusStyle(dummy.status)}`}>{dummy.status}</span></td>
-                    <td className="px-3 py-3 text-xs text-gray-400 italic">Preview</td>
-                  </tr>
-                ))
+                    </div>
+                  </td>
+                </tr>
               ) : (
                 enriched.map(({ app, dummy }) => (
                   <CandidateRow
@@ -432,8 +405,8 @@ function ApplicationsView({ project, applications, onBack, onHire, onReject, hir
           <div className="flex items-start gap-2 bg-amber-50 rounded-lg p-3">
             <Shield size={16} className="text-amber-500 mt-0.5 shrink-0"/>
             <div>
-              <p className="text-xs font-bold text-amber-700">⚠ Risk Medium</p>
-              <p className="text-xs text-amber-600 mt-0.5">Automat Similar resume detected across 6 profiles.</p>
+              <p className="text-xs font-bold text-emerald-700">✓ Analysis Complete</p>
+              <p className="text-xs text-emerald-600 mt-0.5">No immediate risks identified in recent applications.</p>
             </div>
           </div>
         </div>
@@ -696,7 +669,7 @@ const Clientprojects = () => {
                     <ProjectCard
                       key={p.id}
                       project={p}
-                      appCount={appCounts[p.id] ?? Math.floor(1000 + i * 34)}
+                      appCount={appCounts[p.id] || 0}
                       type={TYPE_OPTIONS[i % TYPE_OPTIONS.length]}
                       onView={openApplications}
                     />

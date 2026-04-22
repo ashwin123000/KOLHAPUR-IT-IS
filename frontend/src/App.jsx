@@ -24,14 +24,16 @@ import VMLaunch from "./pages/VMLaunch";
 import VMLive from "./pages/VMLive";
 
 import AIJobAnalyzer from "./pages/AIJobAnalyzer"; // <-- New page
+import AICareerRoleBuilder from "./pages/AICareerRoleBuilder";
 import RegistrationFlow from "./pages/RegistrationFlow";
-
+import GlobalAIChatbot from "./components/GlobalAIChatbot"; // 🤖
 import { ClientLayout, FreelancerLayout } from "./components/Layouts";
 
 function App() {
   return (
     <BrowserRouter>
       <div className="font-sans">
+        <GlobalAIChatbot />
         <Routes>
 
           {/* 🏠 Homepage */}
@@ -165,6 +167,9 @@ function App() {
 
           {/* 🤖 AI Job Analyzer Route */}
           <Route path="/ai-analyzer" element={<AIJobAnalyzer />} />
+
+          {/* 🤖 AI Career Role Builder Route */}
+          <Route path="/career-role-builder" element={<AICareerRoleBuilder />} />
 
           {/* 🖥️ Freelancer VM Test Routes */}
           <Route path="/vm-launch" element={<VMLaunch />} />

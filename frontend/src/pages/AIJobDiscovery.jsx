@@ -4,7 +4,7 @@ import {
   Search, MapPin, Clock, SlidersHorizontal, ChevronDown,
   Sparkles, CheckCircle2, TrendingUp, Users, Zap, X, Bell, Filter
 } from 'lucide-react';
-import { mockJobs, userProfile } from '../data/mockJobs';
+import { intelAPI, jobsAPI } from '../services/api';
 
 /* ─── Toast ──────────────────────────────────────────────────────────────────── */
 function Toast({ toasts, removeToast }) {
@@ -55,6 +55,7 @@ function SkeletonCard() {
 
 /* ─── Featured Match Banner ──────────────────────────────────────────────────── */
 function FeaturedBanner({ job, onApply, applied, onView }) {
+  const highlights = job.highlights?.length ? job.highlights : [`Verified match ${job.verified_match || 0}%`];
   return (
     <div
       onClick={() => onView(job.id)}
@@ -70,7 +71,7 @@ function FeaturedBanner({ job, onApply, applied, onView }) {
             <span className="text-green-400 text-xs font-bold uppercase tracking-widest">These Matches</span>
           </div>
           <div className="space-y-2 mb-4">
-            {job.highlights.map((h, i) => (
+            {highlights.map((h, i) => (
               <div key={i} className="flex items-center gap-2 text-slate-200 text-sm">
                 <CheckCircle2 size={14} className="text-green-400 shrink-0" />
                 {h}
@@ -95,7 +96,7 @@ function FeaturedBanner({ job, onApply, applied, onView }) {
 }
 
 /* ─── Job Card ───────────────────────────────────────────────────────────────── */
-function JobCard({ job, applied, onApply, onView }) {
+function JobCard({ job, applied, onApply, onView, trendingSkills = [] }) {
   const [applying, setApplying] = useState(false);
 
   const handleApply = async (e) => {
@@ -116,9 +117,9 @@ function JobCard({ job, applied, onApply, onView }) {
         {/* Company Logo */}
         <div
           className="w-12 h-12 rounded-xl flex items-center justify-center text-white font-bold text-sm shrink-0"
-          style={{ backgroundColor: job.companyColor + '22', color: job.companyColor, border: `1.5px solid ${job.companyColor}44` }}
+          style={{ backgroundColor: `${job.companyColor || '#16a34a'}22`, color: job.companyColor || '#16a34a', border: `1.5px solid ${job.companyColor || '#16a34a'}44` }}
         >
-          {job.companyLogo}
+          {job.companyLogo || (job.company || 'AX').slice(0, 2).toUpperCase()}
         </div>
         <div className="flex-1 min-w-0">
           <h3 className="font-bold text-gray-900 text-base leading-snug group-hover:text-green-700 transition-colors line-clamp-2">
@@ -154,14 +155,32 @@ function JobCard({ job, applied, onApply, onView }) {
       {/* Description Snippet */}
       <p className="text-sm text-gray-600 line-clamp-2 mb-3 leading-relaxed">{job.description}</p>
 
-      {/* Skills */}
+      {/* Skills — velocity badges for trending skills (Fix #4 real velocity) */}
       <div className="flex gap-1.5 flex-wrap mb-4">
-        {job.skills.slice(0, 4).map(s => (
-          <span key={s} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded font-medium">
-            {s}
-          </span>
-        ))}
-        {job.skills.length > 4 && (
+        {(job.skills || []).slice(0, 4).map(s => {
+          const v = trendingSkills.find(t => t.skill.toLowerCase() === s.toLowerCase());
+          const isHot = v && (v.trend === 'high' || v.trend === 'medium');
+          return (
+            <span
+              key={s}
+              className="text-xs px-2 py-0.5 rounded font-medium flex items-center gap-1"
+              style={{
+                background: v?.trend === 'high' ? '#fef3c7' : v?.trend === 'medium' ? '#f3e8ff' : '#f3f4f6',
+                color: v?.trend === 'high' ? '#92400e' : v?.trend === 'medium' ? '#6b21a8' : '#4b5563',
+                border: isHot ? `1px solid ${v.trend === 'high' ? '#fbbf24' : '#d8b4fe'}` : '1px solid transparent',
+              }}
+              title={isHot ? `⚡ Market Pulse: ${v.velocity} this week vs last week` : ''}
+            >
+              {s}
+              {isHot && (
+                <span style={{ fontSize: 9, fontWeight: 800, opacity: 0.85 }}>
+                  {v.velocity}
+                </span>
+              )}
+            </span>
+          );
+        })}
+        {(job.skills || []).length > 4 && (
           <span className="text-xs text-gray-400 px-1 py-0.5">+{job.skills.length - 4}</span>
         )}
       </div>
@@ -195,9 +214,11 @@ export default function AIJobDiscovery() {
   const navigate = useNavigate();
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [appliedIds, setAppliedIds] = useState(new Set());
   const [toasts, setToasts] = useState([]);
   const toastRef = useRef(0);
+  const [trendingSkills, setTrendingSkills] = useState([]);  // Fix #4: real velocity
 
   // ── Filter State ──
   const [roleFilter, setRoleFilter] = useState('All');
@@ -207,11 +228,30 @@ export default function AIJobDiscovery() {
 
   // ── Load with realistic delay ──
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setJobs(mockJobs);
-      setLoading(false);
-    }, 1600);
-    return () => clearTimeout(timer);
+    let active = true;
+    setLoading(true);
+    setLoadError('');
+    jobsAPI.getAll()
+      .then(res => {
+        if (!active) return;
+        setJobs(res.data?.data || []);
+      })
+      .catch(err => {
+        if (!active) return;
+        setJobs([]);
+        setLoadError(err.response?.data?.detail || err.message || 'Failed to load jobs from backend.');
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
+
+  // Fetch market pulse for skill velocity badges — Fix #4
+  useEffect(() => {
+    intelAPI.getPulse()
+      .then(res => { if (res.data?.trending) setTrendingSkills(res.data.trending); })
+      .catch(err => console.warn('Market pulse unavailable', err));
   }, []);
 
   const addToast = (message) => {
@@ -237,9 +277,9 @@ export default function AIJobDiscovery() {
   const filtered = jobs.filter(job => {
     const matchRole = roleFilter === 'All' || job.category === roleFilter;
     const matchLoc = locationFilter === 'All' || job.location === locationFilter || (locationFilter === 'On-site' && !['Remote', 'Hybrid'].includes(job.location));
-    const matchStipend = job.stipend >= stipendRange[0] && job.stipend <= stipendRange[1];
+    const matchStipend = (job.stipend || 0) >= stipendRange[0] && (job.stipend || 0) <= stipendRange[1];
     const q = searchQuery.toLowerCase();
-    const matchSearch = !q || job.title.toLowerCase().includes(q) || job.company.toLowerCase().includes(q) || job.skills.some(s => s.toLowerCase().includes(q));
+    const matchSearch = !q || (job.title || '').toLowerCase().includes(q) || (job.company || '').toLowerCase().includes(q) || (job.skills || []).some(s => s.toLowerCase().includes(q));
     return matchRole && matchLoc && matchStipend && matchSearch;
   });
 
@@ -393,6 +433,10 @@ export default function AIJobDiscovery() {
               <div className="bg-gray-800 rounded-2xl h-36 animate-pulse opacity-60" />
               {[1, 2, 3, 4].map(i => <SkeletonCard key={i} />)}
             </div>
+          ) : loadError ? (
+            <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-5 font-semibold">
+              {loadError}
+            </div>
           ) : (
             <>
               {/* Featured Banner */}
@@ -433,6 +477,7 @@ export default function AIJobDiscovery() {
                       applied={appliedIds.has(job.id)}
                       onApply={handleApply}
                       onView={handleViewJob}
+                      trendingSkills={trendingSkills}
                     />
                   ))}
                 </div>

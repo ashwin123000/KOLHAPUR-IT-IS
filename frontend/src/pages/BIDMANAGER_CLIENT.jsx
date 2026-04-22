@@ -80,7 +80,7 @@ export default function BidManagerClient() {
             coverLetter:   isArray ? b[4] : b.cover_letter,
             bidAmount:     isArray ? b[5] : (b.bidAmount || b.bid_amount),
             freelancerName: `Freelancer ${isArray ? b[2].slice(-4) : ''}`,
-            reliabilityScore: 100
+            reliabilityScore: isArray ? 0 : (b.reliability_score || 0)
           };
         });
         setBids(mappedBids);

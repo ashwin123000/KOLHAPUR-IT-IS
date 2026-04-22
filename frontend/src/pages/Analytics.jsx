@@ -4,6 +4,7 @@
     CartesianGrid, ResponsiveContainer, Cell, PieChart, Pie, Legend
   } from 'recharts';
   import { statsAPI } from '../services/api';
+  import { realtimeClient } from '../services/realtime';
   import { TrendingUp, Award, Briefcase, DollarSign, CheckCircle, Clock } from 'lucide-react';
 
   const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6'];
@@ -26,36 +27,17 @@
     useEffect(() => {
     if (!userId) return;
 
-    fetchData(); // your existing function
-
-    // 🔥 THIS WAS MISSING (IMPORTANT)
-    const ws = new WebSocket("ws://localhost:8000/ws");
-
-    ws.onopen = () => {
-      console.log("✅ WebSocket connected");
-    };
-
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-
-      if (data.type === "rating_update") {
-        console.log("🔥 REALTIME UPDATE RECEIVED");
-
-        fetchRatingOnly(); // update rating
-        fetchData();       // update stats + chart
-      }
-    };
-
-    ws.onerror = (err) => {
-      console.error("WebSocket error:", err);
-    };
-
-    ws.onclose = () => {
-      console.log("❌ WebSocket disconnected");
-    };
+    fetchData();
+    const unsubscribeRatings = realtimeClient.subscribe('rating_update', () => fetchData());
+    const unsubscribeUsers = realtimeClient.subscribe('USER_UPDATE', (msg) => {
+      if (!msg.user_id || msg.user_id === userId || msg.data?.id === userId) fetchData();
+    });
+    const unsubscribeMatches = realtimeClient.subscribe('JOB_MATCH_UPDATE', () => fetchData());
 
     return () => {
-      ws.close(); // cleanup
+      unsubscribeRatings();
+      unsubscribeUsers();
+      unsubscribeMatches();
     };
 
   }, [userId]);

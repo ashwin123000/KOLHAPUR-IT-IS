@@ -1,906 +1,658 @@
-from fastapi import FastAPI, HTTPException, Header, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import sqlite3
 import hashlib
-import uuid
-from fastapi import WebSocket, WebSocketDisconnect
+import hmac
+import json
 import os
+import time
+import uuid
 from datetime import datetime
+from typing import Any
 
-app = FastAPI()
-active_connections = []
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from starlette.middleware.base import BaseHTTPMiddleware
 
-# ===================== CORS =====================
-# Must be registered before any routes
+from .database import db, dumps, init_db, loads
+from .mongodb_realtime import mongo_runtime, serialize_mongo
+
+
+DOWNLOADS_ROOT = os.environ.get("DOWNLOADS_ROOT", os.path.join(os.path.dirname(__file__), "..", "downloads_data"))
+AADHAAR_PEPPER = os.environ.get("AADHAAR_PEPPER", "architect-x-local-pepper-change-me")
+
+
+class WebSocketManager:
+    def __init__(self) -> None:
+        self.active: set[WebSocket] = set()
+
+    async def connect(self, websocket: WebSocket) -> None:
+        await websocket.accept()
+        self.active.add(websocket)
+
+    def disconnect(self, websocket: WebSocket) -> None:
+        self.active.discard(websocket)
+
+    async def broadcast(self, message: dict[str, Any]) -> None:
+        stale: list[WebSocket] = []
+        encoded = json.dumps(message, default=str)
+        for websocket in list(self.active):
+            try:
+                await websocket.send_text(encoded)
+            except Exception:
+                stale.append(websocket)
+        for websocket in stale:
+            self.disconnect(websocket)
+
+
+websocket_manager = WebSocketManager()
+
+
+async def log_requests(request: Request, call_next):
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    print(f"{request.method} {request.url.path} -> {response.status_code} ({process_time:.2f}s)")
+    return response
+
+
+app = FastAPI(title="Architect-X Raw Connection API", version="2.0.0")
+app.add_middleware(BaseHTTPMiddleware, dispatch=log_requests)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3173",
-        "http://localhost:3000",
         "http://localhost:5173",
-        "http://127.0.0.1:3173",
         "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
     ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    os.makedirs(DOWNLOADS_ROOT, exist_ok=True)
+    await init_db()
+    await mongo_runtime.connect()
+    mongo_runtime.start_watchers(websocket_manager.broadcast)
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    await mongo_runtime.close()
+
+
+def aadhaar_hashes(aadhaar: str) -> tuple[str, str]:
+    digits = "".join(ch for ch in aadhaar if ch.isdigit())
+    if len(digits) != 12:
+        raise HTTPException(status_code=400, detail="Aadhaar must contain exactly 12 digits")
+    lookup = hmac.new(AADHAAR_PEPPER.encode(), digits.encode(), hashlib.sha256).hexdigest()
+    audit = hashlib.sha256(f"{digits}:{AADHAAR_PEPPER}".encode()).hexdigest()
+    return lookup, audit
+
+
+def verified_match(match_score: float, trust_score: float) -> float:
+    trust = max(0.0, min(float(trust_score), 1.0))
+    match = max(0.0, min(float(match_score), 100.0))
+    return round(match * (0.7 + 0.3 * trust), 2)
+
+
+def normalize_job(row: dict[str, Any]) -> dict[str, Any]:
+    row["id"] = str(row.get("id"))
+    row["skills"] = loads(row.get("skills"), [])
+    row["jd"] = loads(row.get("jd"), [])
+    row["jr"] = loads(row.get("jr"), [])
+    row["stipendLabel"] = f"Rs {int(row.get('stipend') or 0):,}/month"
+    row["type"] = row.get("job_type")
+    row["postedAgo"] = "Live from database"
+    row["applicants"] = "0 applicants"
+    row["companyLogo"] = "".join(part[0] for part in (row.get("company") or "AX").split()[:2]).upper()
+    row["companyColor"] = "#16a34a"
+    row["highlights"] = [
+        f"Verified match {row.get('verified_match', 0)}%",
+        f"Trust score {round(float(row.get('trust_score') or 0) * 100)}%",
+    ]
+    return row
+
+
+def normalize_user(row: dict[str, Any]) -> dict[str, Any]:
+    row = dict(row)
+    row.pop("password", None)
+    row.pop("aadhaar_audit_hash", None)
+    row["skills"] = loads(row.get("skills"), [])
+    row["resume"] = loads(row.get("resume_metadata"), None)
+    row["history"] = loads(row.get("history"), [])
+    return row
+
+
+async def persist_event(event_type: str, payload: dict[str, Any], user_id: str | None = None) -> dict[str, Any]:
+    event = {
+        "id": str(uuid.uuid4()),
+        "type": event_type,
+        "data": payload,
+        "user_id": user_id,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    await db.execute(
+        "INSERT INTO realtime_events (id, user_id, event_type, payload, timestamp) VALUES (?, ?, ?, ?, ?)",
+        (event["id"], user_id, event_type, dumps(payload), event["timestamp"]),
+    )
+    return event
+
+
+async def publish_event(event_type: str, payload: dict[str, Any], user_id: str | None = None) -> None:
+    event = await persist_event(event_type, payload, user_id)
+    await websocket_manager.broadcast(event)
+
+
+async def sync_missed_events(user_id: str | None, last_timestamp: str | None) -> list[dict[str, Any]]:
+    if not last_timestamp:
+        last_timestamp = "1970-01-01T00:00:00"
+    if user_id:
+        rows = await db.fetch_all(
+            """
+            SELECT * FROM realtime_events
+            WHERE timestamp > ? AND (user_id IS NULL OR user_id = ?)
+            ORDER BY timestamp ASC
+            """,
+            (last_timestamp, user_id),
+        )
+    else:
+        rows = await db.fetch_all(
+            "SELECT * FROM realtime_events WHERE timestamp > ? ORDER BY timestamp ASC",
+            (last_timestamp,),
+        )
+    return [
+        {
+            "id": row["id"],
+            "type": row["event_type"],
+            "data": loads(row.get("payload"), {}),
+            "user_id": row.get("user_id"),
+            "timestamp": row["timestamp"],
+        }
+        for row in rows
+    ]
+
+
+async def next_job_id() -> str | int:
+    columns = await db.fetch_all("PRAGMA table_info(jobs)")
+    id_column = next((column for column in columns if column["name"] == "id"), {})
+    if str(id_column.get("type", "")).upper() == "INTEGER":
+        row = await db.fetch_one("SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM jobs")
+        return int(row["next_id"])
+    return str(uuid.uuid4())
+
+
+class RegisterPayload(BaseModel):
+    email: str
+    password: str
+    full_name: str = ""
+    username: str | None = None
+    aadhaar: str | None = None
+    city: str = ""
+    state: str = ""
+    college: str = ""
+    skills: list[str] = Field(default_factory=list)
+    resume_file_url: str = ""
+
+
+class LoginPayload(BaseModel):
+    email: str
+    password: str
+
+
+class JobPayload(BaseModel):
+    title: str
+    company: str = "Architect-X Client"
+    description: str
+    location: str = "Remote"
+    work_mode: str = "Remote"
+    job_type: str = "Full-time"
+    duration: str = "Ongoing"
+    stipend: int = 0
+    category: str = "Artificial Intelligence"
+    skills: list[str] = Field(default_factory=list)
+    jd: list[str] = Field(default_factory=list)
+    jr: list[str] = Field(default_factory=list)
+    trust_score: float = 0
+    match_score: float = 0
+    github_url: str | None = None
+    client_id: str | None = None
+
+
+class CandidateIngestionPayload(BaseModel):
+    id: str | None = None
+    email: str | None = None
+    full_name: str | None = None
+    github_url: str | None = None
+    github_score: float = 0
+    trust_score: float = 0
+    skills: list[str] = Field(default_factory=list)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class HybridSearchPayload(BaseModel):
+    query_vector: list[float]
+    salary_expected: int | None = None
+    notice_period_days: int | None = None
+    locations: list[str] = Field(default_factory=list)
+    limit: int = 10
+
+
+@app.get("/api/health")
+async def health_check():
+    await db.fetch_one("SELECT 1 AS ok")
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "downloads_root": DOWNLOADS_ROOT,
+        "mongodb_change_streams": mongo_runtime.enabled,
+    }
+
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    active_connections.append(websocket)
-
+    await websocket_manager.connect(websocket)
     try:
         while True:
-            await websocket.receive_text()  # keep connection alive
+            raw = await websocket.receive_text()
+            try:
+                message = json.loads(raw)
+            except json.JSONDecodeError:
+                message = {"type": raw}
+
+            if message.get("type") == "ping":
+                await websocket.send_json({"type": "pong", "timestamp": datetime.utcnow().isoformat()})
+            elif message.get("type") == "sync":
+                missed = await sync_missed_events(
+                    message.get("user_id"),
+                    message.get("last_seen_timestamp"),
+                )
+                await websocket.send_json({
+                    "type": "SYNC_MISSED_EVENTS",
+                    "data": missed,
+                    "timestamp": datetime.utcnow().isoformat(),
+                })
     except WebSocketDisconnect:
-        active_connections.remove(websocket)
+        websocket_manager.disconnect(websocket)
+    except Exception:
+        websocket_manager.disconnect(websocket)
 
-# ===================== DATABASE =====================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "freelance_market.db")
 
-conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-cursor = conn.cursor()
+@app.get("/api/sync/missed")
+async def get_missed_events(last_seen_timestamp: str | None = None, user_id: str | None = None):
+    return {"success": True, "data": await sync_missed_events(user_id, last_seen_timestamp)}
 
-def get_cursor():
-    return conn.cursor()
 
-# ===================== TABLES =====================
+@app.get("/api/auth/check-aadhaar")
+async def check_aadhaar(aadhaar: str):
+    lookup, _ = aadhaar_hashes(aadhaar)
+    found = await db.fetch_one("SELECT id FROM users WHERE aadhaar_lookup = ?", (lookup,))
+    return {"available": found is None}
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    username TEXT,
-    email TEXT UNIQUE,
-    password TEXT,
-    role TEXT
-)
-""")
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS projects (
-    id TEXT PRIMARY KEY,
-    client_id TEXT,
-    title TEXT,
-    description TEXT,
-    budget REAL,
-    status TEXT
-)
-""")
+@app.post("/api/auth/register-v2", status_code=status.HTTP_201_CREATED)
+async def register_v2(payload: RegisterPayload):
+    aadhaar_lookup = None
+    aadhaar_audit_hash = None
+    aadhaar_last_four = None
+    if payload.aadhaar:
+        aadhaar_lookup, aadhaar_audit_hash = aadhaar_hashes(payload.aadhaar)
+        aadhaar_last_four = "".join(ch for ch in payload.aadhaar if ch.isdigit())[-4:]
+        found = await db.fetch_one("SELECT id FROM users WHERE aadhaar_lookup = ?", (aadhaar_lookup,))
+        if found:
+            raise HTTPException(status_code=409, detail="Identity already registered")
 
-try:
-    cursor.execute("ALTER TABLE projects ADD COLUMN assigned_freelancer_id TEXT")
-except:
-    pass
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS applications (
-    id TEXT PRIMARY KEY,
-    project_id TEXT,
-    freelancer_id TEXT,
-    status TEXT,
-    cover_letter TEXT,
-    bid_amount REAL
-)
-""")
-
-try:
-    cursor.execute("ALTER TABLE users ADD COLUMN average_rating REAL DEFAULT 0")
-except:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE users ADD COLUMN reliability_score REAL DEFAULT 0")
-except:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE users ADD COLUMN completed_projects INTEGER DEFAULT 0")
-except:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE payments ADD COLUMN created_at TEXT")
-    conn.commit()
-except:
-    pass
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS ratings (
-    id TEXT PRIMARY KEY,
-    freelancer_id TEXT,
-    project_id TEXT,
-    stars INTEGER,
-    feedback TEXT,
-    on_time_status TEXT
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS rating_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id TEXT,
-    freelancer_id TEXT,
-    old_rating REAL,
-    new_rating REAL,
-    client_stars INTEGER,
-    feedback TEXT,
-    on_time_status TEXT,
-    created_at TEXT
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY,
-    project_id TEXT,
-    sender_id TEXT,
-    receiver_id TEXT,
-    content TEXT,
-    timestamp TEXT
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS notifications (
-    id TEXT PRIMARY KEY,
-    user_id TEXT,
-    content TEXT,
-    is_read INTEGER,
-    timestamp TEXT
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS payments (
-    id TEXT PRIMARY KEY,
-    project_id TEXT,
-    client_id TEXT,
-    freelancer_id TEXT,
-    amount REAL,
-    status TEXT
-)
-""")
-
-conn.commit()
-
-# ===================== MODELS =====================
-
-class FreelancerRegister(BaseModel):
-    username: str
-    email: str
-    password: str
-
-class ClientRegister(BaseModel):
-    username: str
-    email: str
-    password: str
-
-class LoginRequest(BaseModel):
-    email: str
-    password: str
-
-class CreateProject(BaseModel):
-    title: str
-    description: str = ""
-    budget: float
-    clientId: str
-
-class ApplyRequest(BaseModel):
-    projectId: str
-    freelancerId: str
-    coverLetter: str = ""
-    bidAmount: float = 0.0
-
-class HireRequest(BaseModel):
-    applicationId: str
-    projectId: str
-    freelancerId: str
-
-class SubmitWorkRequest(BaseModel):
-    projectId: str
-    freelancerId: str
-
-class VerifyWorkRequest(BaseModel):
-    verify: bool
-
-class RatingRequest(BaseModel):
-    freelancerId: str
-    projectId: str
-    stars: int
-    feedback: str = ""
-    onTimeStatus: str = "ON_TIME"
-
-class MessageRequest(BaseModel):
-    projectId: str
-    senderId: str
-    receiverId: str
-    content: str
-
-class NotificationRequest(BaseModel):
-    userId: str
-    content: str
-
-class PaymentRequest(BaseModel):
-    projectId: str
-    clientId: str
-    freelancerId: str
-    amount: float
-
-# ===================== HELPERS =====================
-
-def hash_password(password: str):
-    return hashlib.sha256(password.encode()).hexdigest()
-
-def generate_token(user_id: str, role: str):
-    return f"{user_id}:{role}:token123"
-
-def get_user_from_token(token: str):
+    user_id = str(uuid.uuid4())
+    resume_metadata = loads(payload.resume_file_url, None) if isinstance(payload.resume_file_url, str) else None
+    if not isinstance(resume_metadata, dict) and payload.resume_file_url:
+        resume_metadata = {"file_id": payload.resume_file_url, "filename": os.path.basename(payload.resume_file_url), "uploaded_at": datetime.utcnow().isoformat()}
     try:
-        parts = token.split(":")
-        return {"userId": parts[0], "role": parts[1]}
-    except:
-        return None
+        async with db.transaction() as conn:
+            await conn.execute(
+            """
+            INSERT INTO users (
+                id, email, username, password, user_type, full_name, city, state,
+                college, skills, resume_file_url, resume_metadata, aadhaar_lookup, aadhaar_audit_hash, history
+            ) VALUES (?, ?, ?, ?, 'freelancer', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    user_id,
+                    payload.email,
+                    payload.username or payload.email.split("@")[0],
+                    payload.password,
+                    payload.full_name,
+                    payload.city,
+                    payload.state,
+                    payload.college,
+                    dumps(payload.skills),
+                    payload.resume_file_url,
+                    dumps(resume_metadata) if resume_metadata else None,
+                    aadhaar_lookup,
+                    aadhaar_audit_hash,
+                    dumps([{
+                        "changed_at": datetime.utcnow().isoformat(),
+                        "field": "registration",
+                        "old_value": None,
+                        "new_value": {"email": payload.email, "aadhaar_last_four": aadhaar_last_four},
+                        "reason": "User registration",
+                    }]),
+                ),
+            )
+            await conn.execute(
+                "INSERT INTO audit_logs (id, entity_type, entity_id, action, payload) VALUES (?, 'user', ?, 'REGISTER', ?)",
+                (str(uuid.uuid4()), user_id, dumps({"email": payload.email, "aadhaar_last_four": aadhaar_last_four})),
+            )
+    except Exception as exc:
+        message = str(exc)
+        if "UNIQUE constraint failed" in message:
+            raise HTTPException(status_code=409, detail="Email, username, or identity already registered") from exc
+        raise
 
-def require_user(authorization: str = Header(None)):
-    if not authorization:
-        raise HTTPException(status_code=401, detail="No token")
-    token = authorization.replace("Bearer ", "")
-    user = get_user_from_token(token)
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    return user
-
-class ReliabilityEngine:
-    POSITIVE_WORDS = {
-        "excellent", "amazing", "outstanding", "great", "good", "fantastic",
-        "superb", "brilliant", "professional", "quality", "perfect", "best",
-        "impressive", "reliable", "recommended", "satisfied", "happy",
-        "efficient", "skilled", "talented", "fast", "clear", "delivered"
-    }
-    NEGATIVE_WORDS = {
-        "bad", "terrible", "horrible", "poor", "awful", "disappointing",
-        "unprofessional", "delayed", "slow", "wrong", "failed", "incomplete",
-        "sloppy", "careless", "mediocre", "frustrating", "avoid", "worse",
-        "useless", "waste", "refund", "ghosted", "disappeared", "ignored"
-    }
-
-    def __init__(self, completed: int, avg_rating: float, timing_list: list, feedbacks: list):
-        self.completed = completed
-        self.avg_rating = avg_rating
-        self.timing_list = timing_list
-        self.feedbacks = feedbacks
-
-    def _star_score(self) -> float:
-        # Stars: 1=0pts, 2=5pts, 3=12pts, 4=20pts, 5=30pts
-        mapping = {1: 0, 2: 5, 3: 12, 4: 20, 5: 30}
-        return mapping.get(round(self.avg_rating), 0)
-
-    def _timing_score(self) -> float:
-        score = 0.0
-        for status in self.timing_list:
-            if status == "BEFORE":
-                score += 10
-            elif status == "ON_TIME":
-                score += 4
-            elif status == "LATE":
-                score -= 15
-        # Cap timing contribution between -30 and +30
-        return max(-30, min(30, score))
-
-    def _experience_score(self) -> float:
-        # +2 per completed project, max 20
-        return min(self.completed * 2.0, 20.0)
-
-    def _sentiment_score(self) -> float:
-        score = 0.0
-        for feedback in self.feedbacks:
-            words = set(feedback.lower().split())
-            positives = len(words & self.POSITIVE_WORDS)
-            negatives = len(words & self.NEGATIVE_WORDS)
-            score += (positives * 2.0) - (negatives * 4.0)
-        # Cap sentiment between -20 and +20
-        return max(-20, min(20, score))
-    
-    @staticmethod
-    def compute_display_rating(all_ratings: list) -> float:
-        """
-        Computes a 0-5 display rating based on:
-        1. Stars given
-        2. On time / late / before
-        3. Sentiment of feedback words
-        """
-        POSITIVE_WORDS = {
-            "excellent", "amazing", "outstanding", "great", "good", "fantastic",
-            "superb", "brilliant", "professional", "quality", "perfect", "best",
-            "impressive", "reliable", "recommended", "satisfied", "happy",
-            "efficient", "skilled", "talented", "fast", "clear", "delivered"
-        }
-        NEGATIVE_WORDS = {
-            "bad", "terrible", "horrible", "poor", "awful", "disappointing",
-            "unprofessional", "delayed", "slow", "wrong", "failed", "incomplete",
-            "sloppy", "careless", "mediocre", "frustrating", "avoid", "worse",
-            "useless", "waste", "refund", "ghosted", "disappeared", "ignored"
-        }
-
-        if not all_ratings:
-            return 0.0
-
-        total_score = 0.0
-
-        for stars, timing, feedback in all_ratings:
-            # 1. Stars contribute 60% of weight (stars/5 * 3.0 max)
-            star_contribution = (stars / 5.0) * 3.0
-
-            # 2. Timing contributes 25% of weight
-            timing_map = {
-                "BEFORE":  0.5,   # early = bonus
-                "ON_TIME": 0.25,  # on time = small bonus
-                "LATE":   -0.75,  # late = penalty
-            }
-            timing_contribution = timing_map.get(timing, 0.0)
-
-            # 3. Sentiment contributes 15% of weight
-            sentiment = 0.0
-            if feedback:
-                words = set(feedback.lower().split())
-                positives = len(words & POSITIVE_WORDS)
-                negatives = len(words & NEGATIVE_WORDS)
-                sentiment = min(0.3, positives * 0.1) - min(0.5, negatives * 0.15)
-
-            total_score += star_contribution + timing_contribution + sentiment
-
-        # Average across all ratings, clamped to 0-5
-        raw = total_score / len(all_ratings)
-        return round(max(0.0, min(5.0, raw)), 2)
-
-    
-    def compute(self) -> float:
-        base = 10.0
-        star = self._star_score()        # max 30
-        timing = self._timing_score()    # -30 to +30
-        experience = self._experience_score()  # max 20
-        sentiment = self._sentiment_score()    # -20 to +20
-
-        total = base + star + timing + experience + sentiment
-        return round(max(0, min(100, total)), 2)
+    row = await db.fetch_one("SELECT * FROM users WHERE id = ?", (user_id,))
+    await publish_event("USER_UPDATE", normalize_user(row), user_id)
+    return {"success": True, "data": {"id": user_id, "email": payload.email}}
 
 
-def calculate_score(completed, avg_rating, timing_list, feedbacks=None):
-    engine = ReliabilityEngine(
-        completed=completed,
-        avg_rating=avg_rating,
-        timing_list=timing_list,
-        feedbacks=feedbacks or []
-    )
-    return engine.compute()
+@app.post("/api/auth/register-freelancer", status_code=status.HTTP_201_CREATED)
+async def register_freelancer(payload: RegisterPayload):
+    return await register_v2(payload)
 
-# ===================== AUTH =====================
 
-@app.post("/api/auth/register-freelancer")
-def register_freelancer(user: FreelancerRegister):
-    cur = get_cursor()
+@app.post("/api/auth/register-client", status_code=status.HTTP_201_CREATED)
+async def register_client(payload: RegisterPayload):
+    user_id = str(uuid.uuid4())
     try:
-        user_id = "freelancer_" + str(uuid.uuid4())[:8]
-        hashed = hash_password(user.password)
-        cur.execute(
-            "INSERT INTO users (id, username, email, password, role) VALUES (?, ?, ?, ?, ?)",
-            (user_id, user.username, user.email, hashed, "freelancer")
-        )
-        conn.commit()
-        return {"success": True, "data": {"userId": user_id}}
-    except sqlite3.IntegrityError:
-        raise HTTPException(status_code=400, detail="Email already exists")
+        async with db.transaction() as conn:
+            await conn.execute(
+                "INSERT INTO users (id, email, username, password, user_type, full_name, history) VALUES (?, ?, ?, ?, 'client', ?, ?)",
+                (
+                    user_id,
+                    payload.email,
+                    payload.username or payload.email.split("@")[0],
+                    payload.password,
+                    payload.full_name,
+                    dumps([{
+                        "changed_at": datetime.utcnow().isoformat(),
+                        "field": "registration",
+                        "old_value": None,
+                        "new_value": {"email": payload.email},
+                        "reason": "Client registration",
+                    }]),
+                ),
+            )
+            await conn.execute(
+                "INSERT INTO audit_logs (id, entity_type, entity_id, action, payload) VALUES (?, 'user', ?, 'REGISTER_CLIENT', ?)",
+                (str(uuid.uuid4()), user_id, dumps({"email": payload.email})),
+            )
+    except Exception as exc:
+        if "UNIQUE constraint failed" in str(exc):
+            raise HTTPException(status_code=409, detail="Email or username already registered") from exc
+        raise
+    row = await db.fetch_one("SELECT * FROM users WHERE id = ?", (user_id,))
+    await publish_event("USER_UPDATE", normalize_user(row), user_id)
+    return {"success": True, "data": {"id": user_id, "email": payload.email}}
 
-@app.post("/api/auth/register-client")
-def register_client(user: ClientRegister):
-    cur = get_cursor()
-    try:
-        user_id = "client_" + str(uuid.uuid4())[:8]
-        hashed = hash_password(user.password)
-        cur.execute(
-            "INSERT INTO users (id, username, email, password, role) VALUES (?, ?, ?, ?, ?)",
-            (user_id, user.username, user.email, hashed, "client")
-        )
-        conn.commit()
-        return {"success": True, "data": {"userId": user_id}}
-    except sqlite3.IntegrityError:
-        raise HTTPException(status_code=400, detail="Email already exists")
 
 @app.post("/api/auth/login")
-def login(user: LoginRequest):
-    cur = get_cursor()
-    cur.execute("SELECT * FROM users WHERE email=?", (user.email,))
-    row = cur.fetchone()
+async def login(payload: LoginPayload):
+    user = await db.fetch_one(
+        "SELECT id, email, user_type, full_name FROM users WHERE email = ? AND password = ?",
+        (payload.email, payload.password),
+    )
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    return {"success": True, "data": user}
+
+
+@app.post("/api/auth/upload-resume")
+async def upload_resume(file: UploadFile = File(...)):
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF resumes are accepted")
+    content = await file.read()
+    resume_metadata = await mongo_runtime.upload_resume(file.filename, content)
+    if resume_metadata is None:
+        resume_dir = os.path.join(DOWNLOADS_ROOT, "resumes")
+        os.makedirs(resume_dir, exist_ok=True)
+        file_id = str(uuid.uuid4())
+        file_path = os.path.join(resume_dir, f"{file_id}.pdf")
+        with open(file_path, "wb") as handle:
+            handle.write(content)
+        resume_metadata = {
+            "file_id": file_id,
+            "filename": file.filename,
+            "uploaded_at": datetime.utcnow().isoformat(),
+            "storage": "local-dev",
+        }
+    return {
+        "success": True,
+        "file_url": dumps(resume_metadata),
+        "resume": resume_metadata,
+        "parsed": {
+            "full_name": "",
+            "email": "",
+            "college": "",
+            "city": "",
+            "state": "",
+            "skills": [],
+            "confidence": 0,
+            "low_confidence_fields": [],
+        },
+    }
+
+
+@app.get("/api/jobs")
+async def get_jobs():
+    rows = await db.fetch_all("SELECT * FROM jobs WHERE status = 'open' ORDER BY created_at DESC")
+    return {"success": True, "data": [normalize_job(row) for row in rows]}
+
+
+@app.get("/api/jobs/{job_id}")
+async def get_job(job_id: str):
+    row = await db.fetch_one("SELECT * FROM jobs WHERE id = ? AND status = 'open'", (job_id,))
     if not row:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    user_id, username, email, stored_password, role = row[:5]
-    if stored_password != hash_password(user.password):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = generate_token(user_id, role)
-    return {"success": True, "data": {"token": token, "userId": user_id, "role": role}}
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"success": True, "data": normalize_job(row)}
 
-# ===================== PROJECTS =====================
 
-@app.post("/api/projects/secure")
-def create_project_secure(project: CreateProject, user=Depends(require_user)):
-    cur = get_cursor()
-    if user["role"] != "client":
-        raise HTTPException(status_code=403, detail="Only clients allowed")
-    project_id = "proj_" + str(uuid.uuid4())[:8]
-    cur.execute(
-        "INSERT INTO projects (id, client_id, title, description, budget, status) VALUES (?, ?, ?, ?, ?, ?)",
-        (project_id, user["userId"], project.title, project.description, project.budget, "open")
+@app.post("/api/jobs", status_code=status.HTTP_201_CREATED)
+async def create_job(payload: JobPayload):
+    job_id = await next_job_id()
+    score = verified_match(payload.match_score, payload.trust_score)
+    trace_id = str(uuid.uuid4())
+    async with db.transaction() as conn:
+        await conn.execute(
+            """
+            INSERT INTO jobs (
+                id, client_id, title, company, description, location, work_mode, job_type,
+                duration, stipend, category, skills, jd, jr, trust_score, match_score,
+                verified_match, github_url
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                job_id,
+                payload.client_id,
+                payload.title,
+                payload.company,
+                payload.description,
+                payload.location,
+                payload.work_mode,
+                payload.job_type,
+                payload.duration,
+                payload.stipend,
+                payload.category,
+                dumps(payload.skills),
+                dumps(payload.jd),
+                dumps(payload.jr),
+                payload.trust_score,
+                payload.match_score,
+                score,
+                payload.github_url,
+            ),
+        )
+        await conn.execute(
+            """
+            INSERT INTO decision_traces (
+                id, match_id, vector_score, cross_encoder_score, langgraph_path, reasoning_log, evidence_mapping
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                trace_id,
+                str(job_id),
+                float(payload.match_score),
+                score,
+                dumps(["Ingestor", "Matcher", "GapAnalyzer"]),
+                dumps([
+                    f"Matched role '{payload.title}' against required skills.",
+                    f"Verified score combined match score {payload.match_score} with trust score {payload.trust_score}.",
+                ]),
+                dumps({
+                    "skills": payload.skills,
+                    "requirements": payload.jr,
+                    "job_description": payload.jd,
+                }),
+            ),
+        )
+        await conn.execute(
+            "INSERT INTO audit_logs (id, entity_type, entity_id, action, payload) VALUES (?, 'job', ?, 'CREATE_JOB', ?)",
+            (str(uuid.uuid4()), str(job_id), dumps({"title": payload.title, "client_id": payload.client_id})),
+        )
+    row = await db.fetch_one("SELECT * FROM jobs WHERE id = ?", (job_id,))
+    await publish_event("JOB_MATCH_UPDATE", normalize_job(row), payload.client_id)
+    return {"success": True, "data": normalize_job(row)}
+
+
+@app.post("/api/jobs/post", status_code=status.HTTP_201_CREATED)
+async def create_weighted_job(payload: JobPayload):
+    return await create_job(payload)
+
+
+@app.patch("/api/jobs/{job_id}/github")
+async def update_job_from_github(job_id: str, payload: dict[str, Any]):
+    trust_score = float(payload.get("trust_score", payload.get("github_trust_score", 0)))
+    match_score = float(payload.get("match_score", 0))
+    score = verified_match(match_score, trust_score)
+    updated = await db.execute(
+        "UPDATE jobs SET trust_score = ?, match_score = ?, verified_match = ?, github_url = COALESCE(?, github_url) WHERE id = ?",
+        (trust_score, match_score, score, payload.get("github_url"), job_id),
     )
-    conn.commit()
-    return {"success": True, "projectId": project_id}
+    if updated == 0:
+        raise HTTPException(status_code=404, detail="Job not found")
+    row = await db.fetch_one("SELECT * FROM jobs WHERE id = ?", (job_id,))
+    await publish_event("JOB_MATCH_UPDATE", normalize_job(row), row.get("client_id"))
+    return {"success": True, "data": normalize_job(row)}
 
-@app.post("/api/projects/submit")
-def submit_work(data: SubmitWorkRequest):
-    cur = get_cursor()
-    cur.execute(
-        "UPDATE projects SET status='submitted' WHERE id=? AND assigned_freelancer_id=?",
-        (data.projectId, data.freelancerId)
+
+@app.post("/api/n8n/candidates", status_code=status.HTTP_201_CREATED)
+async def ingest_candidate(payload: CandidateIngestionPayload):
+    candidate_id = payload.id or str(uuid.uuid4())
+    await db.execute(
+        """
+        INSERT INTO candidates (
+            id, email, full_name, github_url, github_score, trust_score, skills, raw_payload, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(email) DO UPDATE SET
+            full_name = excluded.full_name,
+            github_url = excluded.github_url,
+            github_score = excluded.github_score,
+            trust_score = excluded.trust_score,
+            skills = excluded.skills,
+            raw_payload = excluded.raw_payload,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            candidate_id,
+            payload.email,
+            payload.full_name,
+            payload.github_url,
+            payload.github_score,
+            payload.trust_score,
+            dumps(payload.skills),
+            json.dumps(payload.payload),
+        ),
     )
-    conn.commit()
-    return {"success": True, "message": "Work submitted"}
+    row = await db.fetch_one("SELECT * FROM candidates WHERE email = ? OR id = ?", (payload.email, candidate_id))
+    row["skills"] = loads(row.get("skills"), [])
+    row["raw_payload"] = loads(row.get("raw_payload"), {})
+    await publish_event("USER_UPDATE", row, candidate_id)
+    return {"success": True, "data": row}
 
-@app.post("/api/projects/{project_id}/verify")
-def verify_work(project_id: str, body: VerifyWorkRequest):
-    cur = get_cursor()
-    new_status = "completed" if body.verify else "in_progress"
-    cur.execute("UPDATE projects SET status=? WHERE id=?", (new_status, project_id))
-    conn.commit()
-    return {"success": True, "status": new_status}
 
-@app.post("/api/projects")
-def create_project(project: CreateProject):
-    cur = get_cursor()
-    project_id = "proj_" + str(uuid.uuid4())[:8]
-    cur.execute(
-        "INSERT INTO projects (id, client_id, title, description, budget, status) VALUES (?, ?, ?, ?, ?, ?)",
-        (project_id, project.clientId, project.title, project.description, project.budget, "open")
+@app.get("/api/match/{match_id}/trace")
+async def get_match_trace(match_id: str):
+    row = await db.fetch_one("SELECT * FROM decision_traces WHERE match_id = ?", (match_id,))
+    if not row:
+        raise HTTPException(status_code=404, detail="Decision trace not found for this match")
+    trace = {
+        "id": row["id"],
+        "match_id": row["match_id"],
+        "vector_score": row["vector_score"],
+        "cross_encoder_score": row["cross_encoder_score"],
+        "langgraph_path": loads(row.get("langgraph_path"), []),
+        "reasoning_log": loads(row.get("reasoning_log"), []),
+        "evidence_mapping": loads(row.get("evidence_mapping"), {}),
+        "created_at": row["created_at"],
+    }
+    explanation = " -> ".join(trace["langgraph_path"])
+    return {
+        "success": True,
+        "data": {
+            **trace,
+            "human_readable_explanation": f"Decision flowed through {explanation}. Final verified score: {trace['cross_encoder_score']}.",
+            "node_by_node_reasoning": [
+                {"node": node, "reason": trace["reasoning_log"][idx] if idx < len(trace["reasoning_log"]) else "No additional note"}
+                for idx, node in enumerate(trace["langgraph_path"])
+            ],
+        },
+    }
+
+
+@app.post("/api/search/hybrid-vector")
+async def hybrid_vector_search(payload: HybridSearchPayload):
+    if not mongo_runtime.enabled:
+        raise HTTPException(status_code=503, detail="MongoDB vector search requires MONGODB_URI")
+    filters: dict[str, Any] = {}
+    if payload.salary_expected is not None:
+        filters["salary_expected"] = {"$lte": payload.salary_expected}
+    if payload.notice_period_days is not None:
+        filters["notice_period_days"] = {"$lte": payload.notice_period_days}
+    if payload.locations:
+        filters["location"] = {"$in": payload.locations}
+    if not filters:
+        raise HTTPException(status_code=400, detail="Metadata filters are required for vector search")
+    pipeline = [
+        {
+            "$vectorSearch": {
+                "index": "vector_index",
+                "path": "embedding",
+                "queryVector": payload.query_vector,
+                "numCandidates": 100,
+                "limit": payload.limit,
+                "filter": filters,
+            }
+        }
+    ]
+    results = await mongo_runtime.db.candidates.aggregate(pipeline).to_list(length=payload.limit)
+    return {"success": True, "data": serialize_mongo(results)}
+
+
+@app.get("/api/intelligence/pulse")
+async def market_pulse():
+    rows = await db.fetch_all(
+        """
+        SELECT json_each.value AS skill, COUNT(*) AS count
+        FROM jobs, json_each(jobs.skills)
+        WHERE jobs.status = 'open'
+        GROUP BY json_each.value
+        ORDER BY count DESC
+        LIMIT 10
+        """
     )
-    conn.commit()
-    return {"success": True, "data": {"projectId": project_id}}
+    return {"success": True, "trending": rows}
 
-@app.get("/api/projects/client/{client_id}")
-def get_projects_for_client(client_id: str):
-    cur = get_cursor()
-    cur.execute("SELECT * FROM projects WHERE client_id=?", (client_id,))
-    return {"success": True, "data": cur.fetchall()}
-
-@app.get("/api/projects/freelancer/{user_id}")
-def get_projects_for_freelancer(user_id: str):
-    cur = get_cursor()
-
-    # Projects where freelancer is hired
-    cur.execute("SELECT * FROM projects WHERE assigned_freelancer_id=?", (user_id,))
-    assigned = cur.fetchall()
-
-    # Projects where freelancer has applied but not yet hired
-    cur.execute("""
-        SELECT p.* FROM projects p
-        INNER JOIN applications a ON a.project_id = p.id
-        WHERE a.freelancer_id=? AND p.assigned_freelancer_id IS NULL
-    """, (user_id,))
-    applied = cur.fetchall()
-
-    # Merge and deduplicate by project id
-    seen = set()
-    result = []
-    for p in assigned + applied:
-        if p[0] not in seen:
-            seen.add(p[0])
-            result.append(p)
-
-    return {"success": True, "data": result}
 
 @app.get("/api/projects")
-def get_projects():
-    cur = get_cursor()
-    cur.execute("SELECT * FROM projects")
-    rows = cur.fetchall()
-    return {"success": True, "data": [
-        {"projectId": r[0], "clientId": r[1], "title": r[2],
-         "description": r[3], "budget": r[4], "status": r[5]} for r in rows
-    ]}
-
-# ===================== APPLICATIONS =====================
-
-@app.post("/api/apply/secure")
-def apply_secure(data: ApplyRequest, user=Depends(require_user)):
-    cur = get_cursor()
-    if user["role"] != "freelancer":
-        raise HTTPException(status_code=403, detail="Only freelancers can apply")
-    cur.execute(
-        "SELECT id FROM applications WHERE project_id=? AND freelancer_id=?",
-        (data.projectId, user["userId"])
-    )
-    if cur.fetchone():
-        raise HTTPException(status_code=400, detail="Already applied")
-    app_id = "app_" + str(uuid.uuid4())[:8]
-    cur.execute(
-        "INSERT INTO applications VALUES (?, ?, ?, ?, ?, ?)",
-        (app_id, data.projectId, user["userId"], "pending", data.coverLetter, data.bidAmount)
-    )
-    conn.commit()
-    return {"success": True}
-
-@app.post("/api/apply")
-def apply(data: ApplyRequest):
-    cur = get_cursor()
-    cur.execute(
-        "SELECT id FROM applications WHERE project_id=? AND freelancer_id=?",
-        (data.projectId, data.freelancerId)
-    )
-    if cur.fetchone():
-        raise HTTPException(status_code=400, detail="Already applied")
-    app_id = "app_" + str(uuid.uuid4())[:8]
-    cur.execute(
-        "INSERT INTO applications VALUES (?, ?, ?, ?, ?, ?)",
-        (app_id, data.projectId, data.freelancerId, "pending", data.coverLetter, data.bidAmount)
-    )
-    conn.commit()
-    return {"success": True}
-
-@app.get("/api/applications/{project_id}")
-def get_applications(project_id: str):
-    cur = get_cursor()
-    cur.execute("SELECT * FROM applications WHERE project_id=?", (project_id,))
-    return {"success": True, "data": cur.fetchall()}
-
-@app.put("/api/applications/{app_id}/update-bid")
-def update_bid(app_id: str, body: dict):
-    cur = get_cursor()
-    cur.execute(
-        "UPDATE applications SET bid_amount=? WHERE id=?",
-        (body.get("bidAmount", 0), app_id)
-    )
-    conn.commit()
-    return {"success": True}
-
-# ===================== HIRE =====================
-
-@app.post("/api/hire/secure")
-def hire_secure(data: HireRequest, user=Depends(require_user)):
-    cur = get_cursor()
-    if user["role"] != "client":
-        raise HTTPException(status_code=403, detail="Only clients can hire")
-    cur.execute("SELECT client_id FROM projects WHERE id=?", (data.projectId,))
-    owner = cur.fetchone()
-    if not owner or owner[0] != user["userId"]:
-        raise HTTPException(status_code=403, detail="Not your project")
-    cur.execute("UPDATE applications SET status='accepted' WHERE id=?", (data.applicationId,))
-    cur.execute(
-        "UPDATE applications SET status='rejected' WHERE project_id=? AND id!=?",
-        (data.projectId, data.applicationId)
-    )
-    cur.execute(
-        "UPDATE projects SET assigned_freelancer_id=?, status='in_progress' WHERE id=?",
-        (data.freelancerId, data.projectId)
-    )
-    conn.commit()
-    return {"success": True}
-
-@app.post("/api/hire")
-def hire(data: HireRequest):
-    cur = get_cursor()
-    cur.execute(
-        "UPDATE applications SET status='accepted' WHERE id=? AND project_id=?",
-        (data.applicationId, data.projectId)
-    )
-    cur.execute(
-        "UPDATE applications SET status='rejected' WHERE project_id=? AND id!=?",
-        (data.projectId, data.applicationId)
-    )
-    cur.execute(
-        "UPDATE projects SET assigned_freelancer_id=?, status='in_progress' WHERE id=?",
-        (data.freelancerId, data.projectId)
-    )
-    conn.commit()
-    return {"success": True}
-
-# ===================== MESSAGES =====================
-
-@app.get("/api/messages/user/{user_id}")
-def get_user_messages(user_id: str):
-    cur = get_cursor()
-    cur.execute("SELECT * FROM messages WHERE sender_id=? OR receiver_id=?", (user_id, user_id))
-    return {"success": True, "data": cur.fetchall()}
-
-@app.post("/api/messages")
-def send_message(data: MessageRequest):
-    cur = get_cursor()
-    msg_id = "msg_" + str(uuid.uuid4())[:8]
-    cur.execute(
-        "INSERT INTO messages VALUES (?, ?, ?, ?, ?, ?)",
-        (msg_id, data.projectId, data.senderId, data.receiverId, data.content, datetime.now().isoformat())
-    )
-    conn.commit()
-    return {"success": True}
-
-
-@app.get("/api/messages/{project_id}")
-def get_messages(project_id: str):
-    cur = get_cursor()
-    cur.execute("SELECT * FROM messages WHERE project_id=?", (project_id,))
-    return {"success": True, "data": cur.fetchall()}
-
-# ===================== NOTIFICATIONS =====================
-
-@app.post("/api/notifications")
-def send_notification(data: NotificationRequest):
-    cur = get_cursor()
-    notif_id = "notif_" + str(uuid.uuid4())[:8]
-    cur.execute(
-        "INSERT INTO notifications VALUES (?, ?, ?, ?, ?)",
-        (notif_id, data.userId, data.content, 0, datetime.now().isoformat())
-    )
-    conn.commit()
-    return {"success": True}
-
-@app.get("/api/notifications/{user_id}")
-def get_notifications(user_id: str):
-    cur = get_cursor()
-    cur.execute("SELECT * FROM notifications WHERE user_id=?", (user_id,))
-    return {"success": True, "data": cur.fetchall()}
-
-@app.put("/api/notifications/{notif_id}/read")
-def mark_read(notif_id: str):
-    cur = get_cursor()
-    cur.execute("UPDATE notifications SET is_read=1 WHERE id=?", (notif_id,))
-    conn.commit()
-    return {"success": True}
-
-# ===================== PAYMENTS =====================
-
-@app.post("/api/payments/release")
-def release_payment(body: dict):
-    cur = get_cursor()
-    cur.execute(
-        "UPDATE payments SET status='released' WHERE project_id=?",
-        (body.get("projectId"),)
-    )
-    conn.commit()
-    return {"success": True}
-
-@app.post("/api/payments")
-def create_payment(data: PaymentRequest):
-    cur = get_cursor()
-    pay_id = "pay_" + str(uuid.uuid4())[:8]
-    cur.execute(
-        "INSERT INTO payments VALUES (?, ?, ?, ?, ?, ?)",
-        (pay_id, data.projectId, data.clientId, data.freelancerId, data.amount, "pending")
-    )
-    conn.commit()
-    return {"success": True}
-
-@app.get("/api/payments/{user_id}")
-def get_payments(user_id: str):
-    cur = get_cursor()
-    cur.execute(
-        "SELECT * FROM payments WHERE client_id=? OR freelancer_id=?",
-        (user_id, user_id)
-    )
-    return {"success": True, "data": cur.fetchall()}
-
-# ===================== INVOICES =====================
-
-@app.get("/api/invoices/{user_id}")
-def get_invoices(user_id: str):
-    cur = get_cursor()
-    cur.execute(
-        "SELECT * FROM payments WHERE freelancer_id=? AND status='released'",
-        (user_id,)
-    )
-    return {"success": True, "data": cur.fetchall()}
-
-# ===================== TALENT =====================
-
-@app.get("/api/freelancers")
-def get_freelancers():
-    cur = get_cursor()
-    cur.execute("SELECT id, username, average_rating, reliability_score FROM users WHERE role='freelancer'")
-    return {"success": True, "data": cur.fetchall()}
-
-# ===================== STATS =====================
-
-@app.get("/api/stats/{user_id}/client")
-def client_stats(user_id: str):
-    cur = get_cursor()
-    cur.execute("SELECT COUNT(*) FROM projects WHERE client_id=?", (user_id,))
-    total = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM projects WHERE client_id=? AND status='completed'", (user_id,))
-    completed = cur.fetchone()[0]
-    return {"success": True, "data": {"totalProjects": total, "completedProjects": completed}}
-
-@app.get("/api/stats/{user_id}/freelancer")
-def freelancer_stats(user_id: str):
-    cur = get_cursor()
-    cur.execute("SELECT COUNT(*) FROM applications WHERE freelancer_id=?", (user_id,))
-    apps = cur.fetchone()[0]
-    cur.execute("SELECT completed_projects, reliability_score FROM users WHERE id=?", (user_id,))
-    user_data = cur.fetchone()
-    completed = user_data[0] if user_data else 0
-    score = user_data[1] if user_data else 0
-    cur.execute("""
-        SELECT COUNT(*), SUM(CASE WHEN status='in_progress' THEN 1 ELSE 0 END)
-        FROM projects WHERE assigned_freelancer_id=?
-    """, (user_id,))
-    proj_data = cur.fetchone()
-    total_projects = proj_data[0] if proj_data else 0
-    active_projects = proj_data[1] if proj_data and proj_data[1] else 0
-    cur.execute(
-        "SELECT SUM(amount) FROM payments WHERE freelancer_id=? AND status='released'",
-        (user_id,)
-    )
-    earnings_data = cur.fetchone()
-    total_earnings = earnings_data[0] if earnings_data and earnings_data[0] else 0
-    cur.execute("SELECT average_rating FROM users WHERE id=?", (user_id,))
-    rating_row = cur.fetchone()
-    average_rating = rating_row[0] if rating_row and rating_row[0] else 0.0
-
-    # ── Real growth data: use rating_logs.created_at as the timestamp ──
-    cur.execute("""
-        SELECT DATE(created_at) as day, SUM(amount) as daily
-        FROM payments
-        WHERE freelancer_id=? AND status='released' AND created_at IS NOT NULL
-        GROUP BY DATE(created_at)
-        ORDER BY DATE(created_at) ASC
-    """, (user_id,))
-    raw_growth = cur.fetchall()
-
-    # Build last 30 days with real data filled in
-    from datetime import timedelta
-    today = datetime.now().date()
-    date_map = {}
-    for row in raw_growth:
-        if row[0]:
-            date_map[str(row[0])[:10]] = row[1] or 0
-
-    growth_data = []
-    cumulative = 0
-    for i in range(29, -1, -1):
-        day = today - timedelta(days=i)
-        key = str(day)
-        amount = date_map.get(key, 0)
-        cumulative += amount
-        growth_data.append({"day": key, "amount": amount, "cumulative": cumulative})
-
-    return {"success": True, "data": {
-        "applications": apps, "completed": completed, "score": score,
-        "totalProjects": total_projects, "activeProjects": active_projects,
-        "totalEarnings": total_earnings, "growthData": growth_data, "skills": "",
-        "averageRating": round(average_rating, 2)
-    }}
-# ===================== RATINGS =====================
-@app.post("/api/ratings/secure")
-async def create_rating_secure(data: RatingRequest, user=Depends(require_user)):
-    cur = get_cursor()
-
-    if user["role"] != "client":
-        raise HTTPException(status_code=403, detail="Only client can rate")
-
-    # 🔥 call rating logic
-    result = await create_rating(data)
-
-    # 🔥 fetch project details
-    cur.execute(
-        "SELECT client_id, assigned_freelancer_id, budget FROM projects WHERE id=?",
-        (data.projectId,)
-    )
-    proj = cur.fetchone()
-
-    if proj:
-        client_id, freelancer_id, amount = proj
-        pay_id = "pay_" + str(uuid.uuid4())[:8]
-
-        cur.execute(
-            "INSERT INTO payments VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (pay_id, data.projectId, client_id, freelancer_id, amount, "released", datetime.now().isoformat())
-        )
-
-        conn.commit()
-
-    return result
-
-@app.get("/api/ratings/project/{project_id}")
-def get_rating_for_project(project_id: str):
-    cur = get_cursor()
-    cur.execute(
-        "SELECT stars, on_time_status, feedback FROM ratings WHERE project_id=? ORDER BY rowid DESC LIMIT 1",
-        (project_id,)
-    )
-    row = cur.fetchone()
-    if not row:
-        return {"success": True, "data": None}
-    return {"success": True, "data": {
-        "stars": row[0],
-        "onTimeStatus": row[1],
-        "feedback": row[2]
-    }}
-    
-
-@app.post("/api/ratings")
-async def create_rating(data: RatingRequest):
-    cur = get_cursor()
-
-    try:
-        rating_id = "rat_" + str(uuid.uuid4())[:8]
-
-        cur.execute(
-            "INSERT INTO ratings VALUES (?, ?, ?, ?, ?, ?)",
-            (rating_id, data.freelancerId, data.projectId, data.stars, data.feedback, data.onTimeStatus)
-        )
-
-        cur.execute("SELECT stars, on_time_status, feedback FROM ratings WHERE freelancer_id=?", (data.freelancerId,))
-        all_ratings = cur.fetchall()
-
-        avg_rating = ReliabilityEngine.compute_display_rating(all_ratings)
-
-        cur.execute("SELECT completed_projects FROM users WHERE id=?", (data.freelancerId,))
-        completed = cur.fetchone()[0] or 0
-
-        cur.execute("SELECT on_time_status FROM ratings WHERE freelancer_id=?", (data.freelancerId,))
-        timing_list = [row[0] for row in cur.fetchall()]
-
-        cur.execute("SELECT feedback FROM ratings WHERE freelancer_id=?", (data.freelancerId,))
-        feedbacks = [row[0] for row in cur.fetchall() if row[0]]
-
-        new_score = calculate_score(completed, avg_rating, timing_list, feedbacks)
-
-        cur.execute(
-            "UPDATE users SET average_rating=?, reliability_score=?, completed_projects=completed_projects+1 WHERE id=?",
-            (avg_rating, new_score, data.freelancerId)
-        )
-
-        cur.execute("UPDATE projects SET status='completed' WHERE id=?", (data.projectId,))
-
-        cur.execute("""
-            INSERT INTO rating_logs
-            (project_id, freelancer_id, old_rating, new_rating, client_stars, feedback, on_time_status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            data.projectId,
-            data.freelancerId,
-            0,
-            new_score,
-            data.stars,
-            data.feedback,
-            data.onTimeStatus,
-            datetime.now().isoformat()
-        ))
-
-        conn.commit()
-
-        # 🔥 REALTIME PUSH (INSIDE TRY)
-        for connection in active_connections:
-            try:
-                await connection.send_json({
-                    "type": "rating_update",
-                    "freelancerId": data.freelancerId
-                })
-            except:
-                pass
-
-        return {"success": True, "data": {"avgRating": avg_rating, "score": new_score}}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-# ===================== VALIDATION HELPERS =====================
-
-def check_project_exists(project_id):
-    cur = get_cursor()
-    cur.execute("SELECT id FROM projects WHERE id=?", (project_id,))
-    if not cur.fetchone():
-        raise HTTPException(status_code=404, detail="Project not found")
-
-def check_application_exists(app_id):
-    cur = get_cursor()
-    cur.execute("SELECT id FROM applications WHERE id=?", (app_id,))
-    if not cur.fetchone():
-        raise HTTPException(status_code=404, detail="Application not found")
+async def get_projects():
+    rows = await db.fetch_all("SELECT * FROM projects WHERE status = 'open' ORDER BY created_at DESC")
+    return {"success": True, "data": rows}
