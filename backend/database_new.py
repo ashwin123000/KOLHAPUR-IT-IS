@@ -87,12 +87,3 @@ async def close_db():
     """Close all database connections."""
     await engine.dispose()
     logger.info("Database connections closed")
-
-
-async def get_db_async() -> Generator[Session, None, None]:
-    """Async version of get_db (for async routes)."""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()

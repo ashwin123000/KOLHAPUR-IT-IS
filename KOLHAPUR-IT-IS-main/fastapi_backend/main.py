@@ -12,11 +12,12 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+import aiosqlite
 from bson import ObjectId
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 from pymongo import ReturnDocument
 from redis.asyncio import Redis
@@ -24,6 +25,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .database import (
+    DATABASE_PATH,
     SCHEMA_VERSION,
     close_mongo,
     db,
@@ -34,7 +36,7 @@ from .database import (
     loads,
 )
 from .mongodb_realtime import mongo_runtime, serialize_mongo
-from .routes import assessments_router, auth_router, notifications_router, projects_router, stats_router, talent_intelligence_router, tests_router
+from .routes import assessments_router, auth_router, notifications_router, projects_router, stats_router, talent_intelligence_router, tests_router, vm_router
 from .routes.auth import get_current_user
 from .services.scheduler import shutdown_scheduler, start_scheduler
 from .services.seeker_intelligence import seeker_intelligence_service
@@ -81,11 +83,32 @@ async def log_requests(request: Request, call_next):
     return response
 
 
+async def validate_sqlite_schema() -> None:
+    required_schema = {
+        "projects": {"id", "client_id", "title", "budget", "status", "created_at"},
+        "applications": {"id", "project_id", "freelancer_id", "status", "created_at"},
+        "assessments": {"id", "job_id", "created_by", "title", "status", "created_at"},
+    }
+    async with aiosqlite.connect(DATABASE_PATH) as conn:
+        for table_name, required_columns in required_schema.items():
+            cursor = await conn.execute(f"PRAGMA table_info({table_name})")
+            rows = await cursor.fetchall()
+            if not rows:
+                raise RuntimeError(f"STARTUP FAILURE: table '{table_name}' is missing from SQLite database")
+            actual_columns = {row[1] for row in rows}
+            missing = required_columns - actual_columns
+            if missing:
+                raise RuntimeError(
+                    f"STARTUP FAILURE: table '{table_name}' is missing columns: {sorted(missing)}"
+                )
+
+
 app = FastAPI(title="Architect-X Raw Connection API", version="2.0.0")
-app.add_middleware(BaseHTTPMiddleware, dispatch=log_requests)
 allowed_origins = {
     "http://localhost:5173",
+    "http://localhost:5174",
     "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 }
@@ -96,23 +119,29 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=sorted(allowed_origins),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "x-user-id"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["Content-Type", "Authorization"],
+    max_age=3600,
 )
+app.add_middleware(BaseHTTPMiddleware, dispatch=log_requests)
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(notifications_router, prefix="/api/notifications", tags=["notifications"])
 app.include_router(projects_router, prefix="/api/projects", tags=["projects"])
+app.include_router(projects_router, prefix="/api/v1/projects", tags=["projects-compat"])
 app.include_router(stats_router, prefix="/api/stats", tags=["stats"])
 app.include_router(talent_intelligence_router, prefix="/api", tags=["talent-intelligence"])
 app.include_router(tests_router, prefix="/api", tags=["assessments"])
 app.include_router(assessments_router, prefix="/api/v1/assessments", tags=["vm-assessments"])
+app.include_router(vm_router, prefix="/api/v1/vm", tags=["vm"])
 
 
 @app.on_event("startup")
 async def startup() -> None:
     os.makedirs(DOWNLOADS_ROOT, exist_ok=True)
     await init_db()
+    await validate_sqlite_schema()
     app.state.mongo_db = await init_mongo()
     app.state.redis_enabled = False
     app.state.redis_client = None
@@ -130,6 +159,20 @@ async def startup() -> None:
     mongo_runtime.start_watchers(websocket_manager.broadcast)
     start_scheduler()
     logger.info("Startup complete")
+
+
+@app.get("/health", tags=["system"])
+async def health_check():
+    return {
+        "status": "ok",
+        "cors": "enabled",
+        "database_path": DATABASE_PATH,
+    }
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(content=b"", media_type="image/x-icon")
 
 
 @app.on_event("shutdown")
@@ -2442,6 +2485,10 @@ async def calculate_match(payload: MatchCalculatePayload, request: Request):
 class ChatPayload(BaseModel):
     message: str
     jobId: Optional[str] = None
+    path: str = "/"
+    history: list[dict[str, Any]] = Field(default_factory=list)
+    user_id: str = ""
+    context: dict[str, Any] = Field(default_factory=dict)
 
 
 @app.post("/api/chat")
@@ -2460,17 +2507,16 @@ async def chat(payload: ChatPayload, current_user: dict = Depends(get_current_us
         job_id = payload.jobId
         user_id = current_user.get("id") or current_user.get("userId")
         
-        # Import chat engine
-        from chat_engine import run_chat
-        from services.match_service import calculate_match_score as match_fn
-        
-        # Call chat orchestrator
+        from .chat_engine import run_chat
+
         result = await run_chat(
             message=message,
             user_id=user_id,
             job_id=job_id,
             db=mongo_db,
-            match_engine_func=match_fn
+            path=payload.path,
+            history=payload.history,
+            context=payload.context,
         )
         
         return result
@@ -2491,10 +2537,9 @@ async def clear_chat(current_user: dict = Depends(get_current_user)):
     """
     try:
         user_id = current_user.get("id") or current_user.get("userId")
-        from chat_memory import clear_history
-        clear_history(user_id)
+        from .chat_engine import clear_chat_history
         logger.info(f"Chat history cleared for user {user_id}")
-        return {"message": "Chat history cleared"}
+        return await clear_chat_history(user_id)
     except Exception as e:
         logger.error(f"Error clearing chat history: {e}")
         return {"error": str(e)}

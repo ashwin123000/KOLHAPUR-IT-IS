@@ -7,7 +7,17 @@ from models.user_new import User
 from models.resume import Resume
 from models.job_new import Job
 from models.application import Application
-from models.vm_session import VMSession, VMEvent
+from models.vm_session import (
+    VMSession,
+    VMSubmission,
+    VMQuestion,
+    VMAnswer,
+    VMResult,
+    VMBehavior,
+    VMBehaviorEvent,
+    VMImprovement,
+    VMEvent,
+)
 from models.chat_message import ChatMessage
 
 __all__ = [
@@ -16,6 +26,13 @@ __all__ = [
     "Job",
     "Application",
     "VMSession",
+    "VMSubmission",
+    "VMQuestion",
+    "VMAnswer",
+    "VMResult",
+    "VMBehavior",
+    "VMBehaviorEvent",
+    "VMImprovement",
     "VMEvent",
     "ChatMessage",
 ]

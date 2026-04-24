@@ -9,6 +9,7 @@ from typing import List, Dict
 # In-memory store — keyed by userId
 # Each user gets a deque of max 10 messages
 chat_sessions: Dict[str, deque] = defaultdict(lambda: deque(maxlen=10))
+session_state: Dict[str, dict] = defaultdict(dict)
 
 
 def add_to_history(user_id: str, role: str, content: str) -> None:
@@ -48,6 +49,8 @@ def clear_history(user_id: str) -> None:
     """
     if user_id in chat_sessions:
         chat_sessions[user_id].clear()
+    if user_id in session_state:
+        session_state[user_id].clear()
 
 
 def get_last_n_messages(user_id: str, n: int = 3) -> List[Dict[str, str]]:
@@ -82,5 +85,15 @@ def has_recent_suggestion(user_id: str, suggestion_keyword: str) -> bool:
     for msg in recent:
         if keyword_lower in msg.get("content", "").lower():
             return True
-    
+
     return False
+
+
+def get_session_state(user_id: str) -> dict:
+    return dict(session_state[user_id])
+
+
+def update_session_state(user_id: str, updates: dict) -> dict:
+    current = session_state[user_id]
+    current.update(updates or {})
+    return dict(current)

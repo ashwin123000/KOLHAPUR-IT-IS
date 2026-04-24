@@ -428,6 +428,21 @@ async def init_db() -> None:
             "published_at": "TIMESTAMP",
             "expires_at": "TIMESTAMP",
         })
+        await _ensure_columns(conn, "projects", {
+            "client_id": "TEXT",
+            "title": "TEXT NOT NULL DEFAULT 'Untitled project'",
+            "description": "TEXT",
+            "budget": "REAL NOT NULL DEFAULT 0",
+            "skills_required": "TEXT DEFAULT '[]'",
+            "status": "TEXT DEFAULT 'open'",
+            "created_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+            "assigned_freelancer_id": "TEXT",
+        })
+        await _ensure_columns(conn, "applications", {
+            "proposal": "TEXT",
+            "status": "TEXT DEFAULT 'pending'",
+            "created_at": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+        })
 
         await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email)")
         await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_aadhaar_lookup_unique ON users(aadhaar_lookup) WHERE aadhaar_lookup IS NOT NULL")
@@ -436,6 +451,9 @@ async def init_db() -> None:
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_realtime_events_timestamp ON realtime_events(timestamp)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_open_title ON jobs(title) WHERE status = 'open'")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_open_category ON jobs(category) WHERE status = 'open'")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_client_created_at ON projects(client_id, created_at)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_projects_status_created_at ON projects(status, created_at)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_applications_project_created_at ON applications(project_id, created_at)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_job_posts_status_ai ON job_posts(status, is_ai_enhanced, created_at)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_job_posts_posted_by ON job_posts(posted_by, created_at)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_assessments_job_id ON assessments(job_id, status)")
@@ -484,6 +502,10 @@ async def init_mongo() -> AsyncIOMotorDatabase:
     await mongo_db.submissions.create_index("submittedAt")
     await mongo_db.notifications.create_index([("userId", 1), ("createdAt", -1)])
     await mongo_db.notifications.create_index([("type", 1), ("entityId", 1)])
+    await mongo_db.vm_sessions.create_index([("user_id", 1), ("project_id", 1), ("status", 1)])
+    await mongo_db.vm_sessions.create_index("project_id")
+    await mongo_db.vm_sessions.create_index("status")
+    await mongo_db.vm_sessions.create_index("created_at")
     await mongo_db.vm_codebases.create_index("assessment_id", unique=True)
     await mongo_db.vm_codebase_summaries.create_index("assessment_id", unique=True)
     await mongo_db.vm_llm_evaluations.create_index([("submission_id", 1), ("evaluated_at", -1)])

@@ -25,6 +25,10 @@ class JobCreateRequest(BaseModel):
     )
     has_vm_test: Optional[bool] = False
     vm_test_duration_minutes: Optional[int] = 60
+    repo_url: Optional[str] = None
+    codebase_path: Optional[str] = None
+    environment: Dict[str, Any] = Field(default_factory=dict)
+    starter_code: Optional[str] = None
 
 
 class JobListResponse(BaseModel):
@@ -37,6 +41,10 @@ class JobListResponse(BaseModel):
     work_mode: str
     salary_min: Optional[float] = None
     salary_max: Optional[float] = None
+    required_skills: List[Dict[str, Any]] = Field(default_factory=list)
+    environment: Dict[str, Any] = Field(default_factory=dict)
+    repo_url: Optional[str] = None
+    codebase_path: Optional[str] = None
     created_at: datetime
     
     class Config:
@@ -58,6 +66,10 @@ class JobResponse(BaseModel):
     salary_min: Optional[float] = None
     salary_max: Optional[float] = None
     required_skills: List[Dict[str, Any]] = Field(default_factory=list)
+    repo_url: Optional[str] = None
+    codebase_path: Optional[str] = None
+    environment: Dict[str, Any] = Field(default_factory=dict)
+    starter_code: Optional[str] = None
     status: str
     has_vm_test: bool
     vm_test_duration_minutes: Optional[int] = None

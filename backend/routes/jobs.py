@@ -54,6 +54,10 @@ async def create_job(
         salary_min=request.salary_min,
         salary_max=request.salary_max,
         required_skills=request.required_skills,
+        repo_url=request.repo_url,
+        codebase_path=request.codebase_path,
+        environment=request.environment,
+        starter_code=request.starter_code,
         status="active",
         has_vm_test=request.has_vm_test or False,
         vm_test_duration_minutes=request.vm_test_duration_minutes,
@@ -78,6 +82,7 @@ async def create_job(
 async def list_jobs(
     skip: int = 0,
     limit: int = 20,
+    vm_only: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -91,9 +96,11 @@ async def list_jobs(
     if limit > 100:
         limit = 100
     
+    query = select(Job).filter(Job.status == "active")
+    if vm_only:
+        query = query.filter(Job.has_vm_test.is_(True))
     result = await db.execute(
-        select(Job)
-        .filter(Job.status == "active")
+        query
         .order_by(Job.created_at.desc())
         .offset(skip)
         .limit(limit)
@@ -178,6 +185,10 @@ async def update_job(
     job.salary_min = request.salary_min
     job.salary_max = request.salary_max
     job.required_skills = request.required_skills
+    job.repo_url = request.repo_url
+    job.codebase_path = request.codebase_path
+    job.environment = request.environment
+    job.starter_code = request.starter_code
     job.has_vm_test = request.has_vm_test or False
     job.vm_test_duration_minutes = request.vm_test_duration_minutes
     job.updated_at = datetime.utcnow()

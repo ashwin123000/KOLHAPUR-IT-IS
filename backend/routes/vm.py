@@ -1,405 +1,440 @@
-"""
-VM Routes — Master Prompt V2.0
-Endpoints: start session, submit code, get results, track events
-"""
+from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
 
+from auth.dependencies import get_current_recruiter, get_current_user
+from celery_app import celery_app
 from database_new import get_db
+from models.job_new import Job
 from models.user_new import User
-from models.vm_session import VMSession, VMEvent
-from models.application import Application
-from auth.dependencies import get_current_user
-from services.vm_service import (
-    VMContainerManager,
-    AntiCheatDetector,
-    CodeTester,
-    PerformanceScorer,
+from models.vm_session import (
+    VMAnswer,
+    VMBehavior,
+    VMBehaviorEvent,
+    VMImprovement,
+    VMQuestion,
+    VMResult,
+    VMSession,
+    VMSubmission,
 )
 from schemas.vm import (
-    VMSessionStartRequest,
-    VMSessionResponse,
-    VMCodeSubmitRequest,
-    VMCodeSubmitResponse,
-    VMEventRequest,
+    VMAnalyticsResponse,
+    VMAnswersRequest,
+    VMImprovementResponse,
+    VMLeaderboardEntry,
+    VMLeaderboardResponse,
+    VMProjectSummary,
+    VMQuestionsResponse,
+    VMResultResponse,
+    VMRunRequest,
+    VMRunResponse,
+    VMAutosaveRequest,
+    VMStartRequest,
+    VMStartResponse,
+    VMSubmitRequest,
+    VMSubmitResponse,
 )
+from services.vm_runtime import (
+    VMInfrastructureError,
+    VMResourceError,
+    cleanup_workspace,
+    container_pool,
+    exec_code,
+    security_scan,
+    seed_workspace,
+    write_main_file,
+)
+from tasks.vm_assessment_tasks import evaluate_answers, evaluate_submission
+
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/vm", tags=["vm"])
+projects_router = APIRouter(prefix="/projects", tags=["projects"])
+recruiter_router = APIRouter(prefix="/recruiter", tags=["recruiter"])
 
 
-@router.post(
-    "/sessions/start",
-    response_model=VMSessionResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Start VM Test Session",
-    description="Start a new coding test session"
-)
-async def start_vm_session(
-    request: VMSessionStartRequest,
+def _project_to_summary(project: Job) -> VMProjectSummary:
+    skills = []
+    for item in project.required_skills or []:
+        if isinstance(item, dict):
+            skills.append(str(item.get("skill") or item.get("name") or ""))
+        else:
+            skills.append(str(item))
+    return VMProjectSummary(
+        project_id=str(project.id),
+        title=project.title,
+        description=project.description,
+        required_skills=[skill for skill in skills if skill],
+        environment=project.environment or {},
+        repo_url=project.repo_url,
+    )
+
+
+async def _get_session_or_404(db: AsyncSession, session_id: str) -> VMSession:
+    session = await db.get(VMSession, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
+async def _owned_session(db: AsyncSession, session_id: str, user_id: str) -> VMSession:
+    session = await _get_session_or_404(db, session_id)
+    if str(session.user_id) != str(user_id):
+        raise HTTPException(status_code=403, detail="Access denied.")
+    return session
+
+
+async def _log_event(db: AsyncSession, session_id: str, event_type: str, payload: dict):
+    db.add(VMBehaviorEvent(session_id=session_id, event_type=event_type, event_payload=payload))
+    await db.flush()
+
+
+@projects_router.get("", response_model=list[VMProjectSummary])
+async def list_vm_projects(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Start a new VM test session.
-    
-    - **application_id**: The application ID for this test
-    - **questions**: Test questions with inputs/expected outputs
-    """
-    
-    # Verify application exists and belongs to user
-    app_result = await db.execute(
-        select(Application).filter(
-            and_(
-                Application.id == request.application_id,
-                Application.user_id == current_user.id,
+    result = await db.execute(
+        select(Job).where(Job.status == "active", Job.has_vm_test.is_(True)).order_by(Job.created_at.desc())
+    )
+    return [_project_to_summary(project) for project in result.scalars().all()]
+
+
+@router.post("/start", response_model=VMStartResponse)
+async def start_vm(
+    request: VMStartRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    project = await db.get(Job, request.project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    existing = (
+        await db.execute(
+            select(VMSession).where(
+                VMSession.user_id == current_user.id,
+                VMSession.project_id == project.id,
+                VMSession.status == "active",
             )
         )
-    )
-    application = app_result.scalar_one_or_none()
-    
-    if not application:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Application not found",
+    ).scalars().first()
+    if existing:
+        return VMStartResponse(
+            session_id=str(existing.id),
+            vm_url=existing.vm_url or "",
+            status=existing.status,
+            project=_project_to_summary(project),
         )
-    
-    # Start Docker container
+
+    session_id = str(uuid.uuid4())
     try:
-        session_id = str(uuid.uuid4())
-        container_id, port = await VMContainerManager.start_container(session_id)
-    except Exception as e:
-        logger.error(f"Failed to start container: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to start test environment",
-        )
-    
-    # Create VM session record
+        container = container_pool.acquire(session_id)
+        workspace_path = await seed_workspace(container, session_id, project)
+    except VMInfrastructureError as exc:
+        raise HTTPException(status_code=503, detail="VM infrastructure unavailable. Contact admin.") from exc
+    except VMResourceError as exc:
+        raise HTTPException(status_code=507, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Docker error: {exc}") from exc
+
     vm_session = VMSession(
-        id=str(uuid.uuid4()),
-        application_id=request.application_id,
+        id=session_id,
         user_id=current_user.id,
-        job_id=application.job_id,
-        container_id=container_id,
-        container_port=port,
-        session_token=str(uuid.uuid4()),
-        status="running",
-        current_question_index=0,
-        total_questions=len(request.questions),
-        questions=request.questions,
-        answers=[],
-        max_score=len(request.questions) * 100,  # Each question worth 100 points
-        expires_at=datetime.utcnow() + timedelta(hours=1),
+        job_id=project.id,
+        project_id=project.id,
+        container_name=f"vm_{session_id}",
+        container_id=container.id,
+        vm_url=f"docker://{container.id[:12]}",
+        workspace_path=workspace_path,
+        language=(project.environment or {}).get("language", "python"),
+        status="active",
+        started_at=datetime.utcnow(),
+        last_activity_at=datetime.utcnow(),
     )
-    
     db.add(vm_session)
+    db.add(VMBehavior(session_id=session_id))
     await db.commit()
-    await db.refresh(vm_session)
-    
-    logger.info(
-        f"VM session started: {vm_session.id} "
-        f"(user: {current_user.email}, container: {container_id[:12]})"
-    )
-    
-    return VMSessionResponse.model_validate(vm_session)
 
-
-@router.post(
-    "/sessions/{session_id}/submit",
-    response_model=VMCodeSubmitResponse,
-    summary="Submit Code Solution",
-    description="Submit code for a test question"
-)
-async def submit_code(
-    session_id: str,
-    request: VMCodeSubmitRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Submit code solution for grading.
-    
-    - **code**: The code to submit
-    - **question_index**: Which question (0-indexed)
-    """
-    
-    # Get session
-    result = await db.execute(
-        select(VMSession).filter(
-            and_(
-                VMSession.id == session_id,
-                VMSession.user_id == current_user.id,
-            )
-        )
-    )
-    vm_session = result.scalar_one_or_none()
-    
-    if not vm_session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Session not found",
-        )
-    
-    if vm_session.status == "expired":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Session has expired",
-        )
-    
-    # Validate question index
-    if request.question_index >= vm_session.total_questions:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid question index",
-        )
-    
-    question = vm_session.questions[request.question_index]
-    test_cases = question.get("test_cases", [])
-    
-    # Grade solution
-    grading_result = await CodeTester.grade_solution(
-        request.code,
-        test_cases,
-        vm_session.container_id,
-    )
-    
-    # Store answer
-    answers = vm_session.answers or []
-    answers.append({
-        "question_index": request.question_index,
-        "code": request.code,
-        "score": grading_result["score"],
-        "passed_tests": grading_result["passed_tests"],
-        "total_tests": grading_result["total_tests"],
-        "submitted_at": datetime.utcnow().isoformat(),
-    })
-    
-    vm_session.answers = answers
-    vm_session.current_question_index = request.question_index + 1
-    
-    # Calculate running score
-    total_score = sum(a["score"] for a in answers)
-    vm_session.score = total_score / vm_session.total_questions if vm_session.total_questions > 0 else 0
-    
-    await db.commit()
-    
-    logger.info(
-        f"Code submitted (session: {session_id}, question: {request.question_index}, score: {grading_result['score']:.1f})"
-    )
-    
-    return VMCodeSubmitResponse(
-        question_index=request.question_index,
-        passed=grading_result["passed_tests"],
-        total=grading_result["total_tests"],
-        score=grading_result["score"],
-        running_score=vm_session.score,
-    )
-
-
-@router.post(
-    "/sessions/{session_id}/events",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Track Anti-Cheat Event",
-    description="Track suspicious activities"
-)
-async def track_event(
-    session_id: str,
-    request: VMEventRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Track anti-cheat events during session.
-    
-    Event types: tab_switch, copy_paste, focus_lost, devtools_open, etc.
-    """
-    
-    # Get session
-    result = await db.execute(
-        select(VMSession).filter(
-            and_(
-                VMSession.id == session_id,
-                VMSession.user_id == current_user.id,
-            )
-        )
-    )
-    vm_session = result.scalar_one_or_none()
-    
-    if not vm_session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Session not found",
-        )
-    
-    # Process event
-    processed_event = AntiCheatDetector.process_event(request.event_type, request.metadata)
-    
-    # Store event
-    event = VMEvent(
-        id=str(uuid.uuid4()),
+    return VMStartResponse(
         session_id=session_id,
-        event_type=request.event_type,
-        severity=processed_event["severity"],
-        flagged=processed_event["flagged"],
-        metadata=processed_event["metadata"],
+        vm_url=vm_session.vm_url or "",
+        status="active",
+        project=_project_to_summary(project),
     )
-    
-    db.add(event)
-    
-    # Check if session should be flagged
-    event_result = await db.execute(
-        select(VMEvent).filter(VMEvent.session_id == session_id)
-    )
-    all_events = event_result.scalars().all()
-    
-    integrity_analysis = AntiCheatDetector.calculate_session_score(
-        [
-            {
-                "event_type": e.event_type,
-                "severity": e.severity,
-                "flagged": e.flagged,
-            }
-            for e in all_events + [event]
-        ]
-    )
-    
-    if integrity_analysis["integrity_score"] < 50:
-        vm_session.status = "flagged"
-    
-    await db.commit()
-    
-    logger.info(f"Anti-cheat event tracked: {request.event_type} (severity: {processed_event['severity']})")
 
 
-@router.post(
-    "/sessions/{session_id}/complete",
-    response_model=dict,
-    summary="Complete VM Session",
-    description="End session and get final results"
-)
-async def complete_session(
-    session_id: str,
+@router.post("/autosave")
+async def autosave(
+    request: VMAutosaveRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Complete VM session and generate final score.
-    """
-    
-    # Get session
-    result = await db.execute(
-        select(VMSession).filter(
-            and_(
-                VMSession.id == session_id,
-                VMSession.user_id == current_user.id,
-            )
-        )
-    )
-    vm_session = result.scalar_one_or_none()
-    
-    if not vm_session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Session not found",
-        )
-    
-    # Get all events
-    event_result = await db.execute(
-        select(VMEvent).filter(VMEvent.session_id == session_id)
-    )
-    events = event_result.scalars().all()
-    
-    # Calculate integrity score
-    integrity_analysis = AntiCheatDetector.calculate_session_score(
-        [
-            {
-                "event_type": e.event_type,
-                "severity": e.severity,
-                "flagged": e.flagged,
-            }
-            for e in events
-        ]
-    )
-    
-    # Calculate final score
-    test_score = vm_session.score or 0.0
-    integrity_score = integrity_analysis["integrity_score"]
-    
-    final_score = PerformanceScorer.calculate_score(
-        test_score, integrity_score, 0  # time_taken would be calculated from session duration
-    )
-    
-    # Generate postmortem
-    postmortem = await PerformanceScorer.generate_postmortem(
-        final_score,
-        {
-            "passed_tests": len([a for a in (vm_session.answers or []) if a.get("score") == 100.0]),
-            "total_tests": vm_session.total_questions,
-        },
-        integrity_score,
-    )
-    
-    # Update session
-    vm_session.status = "completed"
-    vm_session.score = final_score
-    vm_session.performance_summary = postmortem
-    
+    session = await _owned_session(db, request.session_id, str(current_user.id))
+    if session.status not in {"active", "submitted"}:
+        raise HTTPException(status_code=400, detail="No active session found.")
+    try:
+        container = container_pool.client.containers.get(session.container_id)
+        await write_main_file(container, request.code)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Docker error: {exc}") from exc
+    session.last_activity_at = datetime.utcnow()
+    behavior = (await db.execute(select(VMBehavior).where(VMBehavior.session_id == session.id))).scalars().first()
+    if behavior:
+        behavior.final_code_length_chars = len(request.code)
+    await _log_event(db, request.session_id, "autosave", {"code_length": len(request.code)})
     await db.commit()
-    
-    # Stop container
-    await VMContainerManager.stop_container(vm_session.container_id)
-    
-    logger.info(
-        f"VM session completed: {session_id} "
-        f"(score: {final_score:.1f}, integrity: {integrity_score:.1f})"
-    )
-    
-    return {
-        "session_id": session_id,
-        "final_score": final_score,
-        "test_score": test_score,
-        "integrity_score": integrity_score,
-        "postmortem": postmortem,
+    return {"saved": True, "timestamp": datetime.utcnow().isoformat()}
+
+
+@router.post("/run", response_model=VMRunResponse)
+async def run_vm_code(
+    request: VMRunRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await _owned_session(db, request.session_id, str(current_user.id))
+    if session.status != "active":
+        raise HTTPException(status_code=400, detail="Session not active")
+
+    allowed, reason = security_scan(request.code)
+    if not allowed:
+        return VMRunResponse(stdout="", stderr=reason, exit_code=-1, execution_time_ms=0)
+
+    try:
+        container = container_pool.client.containers.get(session.container_id)
+        await write_main_file(container, request.code)
+        result = await exec_code(container, request.language)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Docker error: {exc}") from exc
+
+    session.last_activity_at = datetime.utcnow()
+    behavior = (await db.execute(select(VMBehavior).where(VMBehavior.session_id == session.id))).scalars().first()
+    if behavior:
+        behavior.run_count += 1
+        behavior.final_code_length_chars = len(request.code)
+        if behavior.first_run_at is None:
+            behavior.first_run_at = datetime.utcnow()
+        if result["exit_code"] != 0:
+            behavior.error_count += 1
+        if result["exit_code"] == 0 and behavior.first_clean_run_at is None:
+            behavior.first_clean_run_at = datetime.utcnow()
+    event_payload = {
+        "exit_code": result["exit_code"],
+        "duration_ms": result["execution_time_ms"],
+        "code_length": len(request.code),
     }
+    await _log_event(db, request.session_id, "run_attempt", event_payload)
+    if result["exit_code"] == 0:
+        await _log_event(db, request.session_id, "clean_run", event_payload)
+    if "SyntaxError" in result["stderr"]:
+        await _log_event(db, request.session_id, "syntax_error", {"error_message": result["stderr"]})
+    await db.commit()
+    return VMRunResponse(**result)
 
 
-@router.get(
-    "/sessions/{session_id}",
-    response_model=VMSessionResponse,
-    summary="Get Session Status",
-    description="Get current session status and progress"
-)
-async def get_session_status(
+@router.post("/submit", response_model=VMSubmitResponse)
+async def submit_vm_code(
+    request: VMSubmitRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await _owned_session(db, request.session_id, str(current_user.id))
+    if session.status != "active":
+        raise HTTPException(status_code=400, detail="No active session found.")
+
+    submission = VMSubmission(session_id=session.id, code=request.code, language=request.language)
+    db.add(submission)
+    session.status = "submitted"
+    session.submitted_at = datetime.utcnow()
+    session.last_activity_at = datetime.utcnow()
+    behavior = (await db.execute(select(VMBehavior).where(VMBehavior.session_id == session.id))).scalars().first()
+    if behavior:
+        behavior.submitted_at = datetime.utcnow()
+        behavior.final_code_length_chars = len(request.code)
+    await _log_event(db, request.session_id, "submit", {"code_length": len(request.code)})
+    await db.commit()
+    try:
+        evaluate_submission.delay(str(session.id))
+    except Exception:
+        await evaluate_submission.run(str(session.id))
+    return VMSubmitResponse(
+        message="Code submitted. Questions will be generated shortly.",
+        submission_id=str(submission.submission_id),
+    )
+
+
+@router.get("/questions/{session_id}", response_model=VMQuestionsResponse)
+async def get_questions(
     session_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Get VM session status and progress.
-    """
-    
-    result = await db.execute(
-        select(VMSession).filter(
-            and_(
-                VMSession.id == session_id,
-                VMSession.user_id == current_user.id,
-            )
-        )
+    await _owned_session(db, session_id, str(current_user.id))
+    question_row = (
+        await db.execute(select(VMQuestion).where(VMQuestion.session_id == session_id).order_by(VMQuestion.generated_at.desc()))
+    ).scalars().first()
+    if not question_row:
+        return VMQuestionsResponse(status="pending", questions=None)
+    return VMQuestionsResponse(status="ready", questions=question_row.questions)
+
+
+@router.post("/answers")
+async def submit_answers(
+    request: VMAnswersRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await _owned_session(db, request.session_id, str(current_user.id))
+    if session.status not in {"submitted", "active"}:
+        raise HTTPException(status_code=400, detail="No active session found.")
+    db.add(VMAnswer(session_id=session.id, answers=[item.model_dump() for item in request.answers]))
+    session.status = "evaluating"
+    session.last_activity_at = datetime.utcnow()
+    await _log_event(db, request.session_id, "answer_typed", {"answer_lengths": [len(item.answer) for item in request.answers]})
+    await db.commit()
+    try:
+        evaluate_answers.delay(str(session.id))
+    except Exception:
+        await evaluate_answers.run(str(session.id))
+    return {"message": "Answers received. Evaluation in progress."}
+
+
+@router.get("/result/{session_id}", response_model=VMResultResponse)
+async def get_result(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await _owned_session(db, session_id, str(current_user.id))
+    if session.status == "timed_out":
+        return VMResultResponse(status="timed_out", project_id=str(session.project_id))
+    result = (await db.execute(select(VMResult).where(VMResult.session_id == session.id))).scalars().first()
+    if not result:
+        return VMResultResponse(status=session.status, project_id=str(session.project_id))
+    total = (
+        await db.execute(select(func.count(VMResult.result_id)).where(VMResult.project_id == result.project_id))
+    ).scalar_one()
+    return VMResultResponse(
+        status="evaluated",
+        score=result.score,
+        rank=result.rank,
+        total=int(total),
+        reasoning=result.reasoning,
+        evaluated_at=result.evaluated_at,
+        project_id=str(result.project_id),
     )
-    vm_session = result.scalar_one_or_none()
-    
-    if not vm_session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Session not found",
+
+
+@router.get("/leaderboard/{project_id}", response_model=VMLeaderboardResponse)
+async def get_leaderboard(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    rows = (
+        await db.execute(
+            select(VMResult, User)
+            .join(User, User.id == VMResult.user_id)
+            .where(VMResult.project_id == project_id)
+            .order_by(VMResult.rank.asc(), VMResult.score.desc())
         )
-    
-    return VMSessionResponse.model_validate(vm_session)
+    ).all()
+    leaderboard = [
+        VMLeaderboardEntry(
+            rank=result.rank or index + 1,
+            user_id=str(user.id),
+            name=user.full_name or user.email,
+            score=result.score or 0,
+            reasoning=result.reasoning,
+            evaluated_at=result.evaluated_at,
+        )
+        for index, (result, user) in enumerate(rows)
+    ]
+    return VMLeaderboardResponse(project_id=project_id, total=len(leaderboard), leaderboard=leaderboard)
+
+
+@router.get("/improvement/{session_id}", response_model=VMImprovementResponse)
+async def get_improvement(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await _owned_session(db, session_id, str(current_user.id))
+    improvement = (await db.execute(select(VMImprovement).where(VMImprovement.session_id == session_id))).scalars().first()
+    if not improvement:
+        return VMImprovementResponse(status="pending")
+    return VMImprovementResponse(status="ready", improved_code=improvement.improved_code)
+
+
+@router.delete("/session/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def end_session(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await _owned_session(db, session_id, str(current_user.id))
+    container_pool.release(session_id, destroy=True)
+    cleanup_workspace(session_id)
+    session.status = "ended"
+    session.ended_at = datetime.utcnow()
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@recruiter_router.get("/session/{session_id}/analytics", response_model=VMAnalyticsResponse)
+async def recruiter_session_analytics(
+    session_id: str,
+    recruiter: User = Depends(get_current_recruiter),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await _get_session_or_404(db, session_id)
+    project = await db.get(Job, session.project_id)
+    if not project or str(project.recruiter_id) != str(recruiter.id):
+        raise HTTPException(status_code=403, detail="Access denied.")
+    behavior = (await db.execute(select(VMBehavior).where(VMBehavior.session_id == session.id))).scalars().first()
+    events = (
+        await db.execute(
+            select(VMBehaviorEvent).where(VMBehaviorEvent.session_id == session.id).order_by(VMBehaviorEvent.occurred_at.asc())
+        )
+    ).scalars().all()
+    duration_minutes = int(((session.submitted_at or datetime.utcnow()) - session.started_at).total_seconds() / 60) if session.started_at else 0
+    error_rate = round((behavior.error_count / max(behavior.run_count, 1)) * 100) if behavior else 0
+    first_clean_minute = None
+    if behavior and behavior.first_run_at and behavior.first_clean_run_at:
+        first_clean_minute = int((behavior.first_clean_run_at - behavior.first_run_at).total_seconds() / 60)
+    overview = {
+        "started_at": session.started_at,
+        "submitted_at": session.submitted_at,
+        "duration_minutes": duration_minutes,
+        "total_runs": behavior.run_count if behavior else 0,
+        "error_rate_pct": error_rate,
+        "first_clean_run_at_minute": first_clean_minute,
+        "final_code_length_chars": behavior.final_code_length_chars if behavior else 0,
+    }
+    timeline = [
+        {
+            "minute": int((event.occurred_at - session.started_at).total_seconds() / 60) if session.started_at else 0,
+            "event": event.event_type,
+            **event.event_payload,
+        }
+        for event in events
+    ]
+    behavior_score = max(0, 100 - error_rate)
+    interpretation = (
+        "Candidate iterated steadily and reached submission with a manageable error profile."
+        if error_rate < 50
+        else "Candidate showed a high error rate and likely learned significantly during the session."
+    )
+    return VMAnalyticsResponse(
+        session_overview=overview,
+        timeline=timeline,
+        interpretation=interpretation,
+        behavior_score=behavior_score,
+    )

@@ -1,87 +1,116 @@
-"""
-VM Schemas — Pydantic validation
-"""
+from __future__ import annotations
 
-from typing import Optional, List, Dict, Any
 from datetime import datetime
+from typing import Any, Literal
+
 from pydantic import BaseModel, Field
 
 
-class VMTestQuestion(BaseModel):
-    """A single test question."""
-    index: int
+class VMProjectSummary(BaseModel):
+    project_id: str
     title: str
     description: str
-    test_cases: List[Dict[str, Any]] = Field(
-        default_factory=list,
-        description="Test cases with input and expected_output"
-    )
-    time_limit: Optional[int] = 300  # seconds
+    required_skills: list[str] = Field(default_factory=list)
+    environment: dict[str, Any] = Field(default_factory=dict)
+    repo_url: str | None = None
 
 
-class VMSessionStartRequest(BaseModel):
-    """Start VM session request."""
-    application_id: str
-    questions: List[Dict[str, Any]] = Field(..., description="Test questions")
+class VMStartRequest(BaseModel):
+    project_id: str
 
 
-class VMSessionResponse(BaseModel):
-    """VM session details."""
-    id: str
-    application_id: str
-    user_id: str
-    job_id: str
-    container_id: Optional[str] = None
-    container_port: Optional[int] = None
-    session_token: str
-    status: str = Field(..., description="running, completed, expired, flagged")
-    current_question_index: int
-    total_questions: int
-    score: Optional[float] = None
-    max_score: float
-    answers: List[Dict[str, Any]] = Field(default_factory=list)
-    performance_summary: Optional[Dict[str, Any]] = None
-    expires_at: datetime
-    created_at: datetime
-    updated_at: datetime
-    
-    class Config:
-        from_attributes = True
-
-
-class VMCodeSubmitRequest(BaseModel):
-    """Submit code solution."""
-    code: str = Field(..., min_length=1)
-    question_index: int
-    language: Optional[str] = "python"
-
-
-class VMCodeSubmitResponse(BaseModel):
-    """Code submission result."""
-    question_index: int
-    passed: int = Field(..., description="Number of test cases passed")
-    total: int = Field(..., description="Total test cases")
-    score: float = Field(..., description="Score 0-100")
-    running_score: float = Field(..., description="Session running score")
-
-
-class VMEventRequest(BaseModel):
-    """Anti-cheat event."""
-    event_type: str = Field(
-        ...,
-        description="tab_switch, copy_paste, focus_lost, devtools_open, etc."
-    )
-    metadata: Optional[Dict[str, Any]] = None
-
-
-class VMEventResponse(BaseModel):
-    """Anti-cheat event response."""
-    id: str
+class VMStartResponse(BaseModel):
     session_id: str
-    event_type: str
-    severity: str = Field(..., description="low, medium, high")
-    flagged: bool
-    created_at: datetime
-    
-    class Config:
-        from_attributes = True
+    vm_url: str
+    status: str
+    project: VMProjectSummary
+
+
+class VMRunRequest(BaseModel):
+    session_id: str
+    code: str = Field(min_length=1)
+    language: str = Field(default="python", min_length=2)
+
+
+class VMAutosaveRequest(BaseModel):
+    session_id: str
+    code: str
+
+
+class VMRunResponse(BaseModel):
+    stdout: str
+    stderr: str
+    exit_code: int
+    execution_time_ms: int
+
+
+class VMSubmitRequest(BaseModel):
+    session_id: str
+    code: str = Field(min_length=1)
+    language: str = Field(default="python", min_length=2)
+
+
+class VMSubmitResponse(BaseModel):
+    message: str
+    submission_id: str
+
+
+class VMQuestionItem(BaseModel):
+    index: int
+    type: Literal["tradeoff", "optimization", "edge_case"] | str
+    line_reference: int | None = None
+    code_snippet: str | None = None
+    text: str
+
+
+class VMQuestionsResponse(BaseModel):
+    status: str
+    questions: list[VMQuestionItem] | None = None
+
+
+class VMAnswerItem(BaseModel):
+    question_index: int
+    answer: str = Field(min_length=1)
+
+
+class VMAnswersRequest(BaseModel):
+    session_id: str
+    answers: list[VMAnswerItem]
+
+
+class VMResultResponse(BaseModel):
+    status: str
+    score: int | None = None
+    rank: int | None = None
+    total: int | None = None
+    reasoning: str | None = None
+    evaluated_at: datetime | None = None
+    project_id: str | None = None
+
+
+class VMLeaderboardEntry(BaseModel):
+    rank: int
+    user_id: str
+    name: str
+    score: int
+    reasoning: str | None = None
+    evaluated_at: datetime | None = None
+
+
+class VMLeaderboardResponse(BaseModel):
+    project_id: str
+    total: int
+    leaderboard: list[VMLeaderboardEntry]
+
+
+class VMAnalyticsResponse(BaseModel):
+    session_overview: dict[str, Any]
+    timeline: list[dict[str, Any]]
+    interpretation: str
+    behavior_score: int
+
+
+class VMImprovementResponse(BaseModel):
+    status: str
+    improved_code: str | None = None
+

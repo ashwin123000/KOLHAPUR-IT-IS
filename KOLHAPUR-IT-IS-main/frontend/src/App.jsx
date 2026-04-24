@@ -1,4 +1,5 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
@@ -22,6 +23,10 @@ import AIJobDiscovery from "./pages/AIJobDiscovery";
 import AIJobDetail from "./pages/AIJobDetail";
 import VMLaunch from "./pages/VMLaunch";
 import VMLive from "./pages/VMLive";
+import VMProjectList from "./pages/VMProjectList";
+import VMWorkspace from "./pages/VMWorkspace";
+import VMQuestions from "./pages/VMQuestions";
+import VMResult from "./pages/VMResult";
 import TestPage from "./pages/TestPage";
 import RecruiterTestManager from "./pages/RecruiterTestManager";
 import AssessmentCreate from "./pages/AssessmentCreate";
@@ -36,6 +41,8 @@ import GlobalAIChatbot from "./components/GlobalAIChatbot";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { ClientLayout, FreelancerLayout } from "./components/Layouts";
 import { useAuth } from "./context/AuthContext";
+
+const queryClient = new QueryClient();
 
 function AppRoutes() {
   const { user, setUser, loading } = useAuth();
@@ -305,6 +312,38 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
+        <Route
+          path="/vm/projects"
+          element={
+            <ProtectedRoute user={user} loading={loading}>
+              <VMProjectList />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/vm/:sessionId"
+          element={
+            <ProtectedRoute user={user} loading={loading}>
+              <VMWorkspace />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/vm/:sessionId/questions"
+          element={
+            <ProtectedRoute user={user} loading={loading}>
+              <VMQuestions />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/vm/:sessionId/result"
+          element={
+            <ProtectedRoute user={user} loading={loading}>
+              <VMResult />
+            </ProtectedRoute>
+          }
+        />
 
         <Route
           path="/test/:jobId"
@@ -377,9 +416,11 @@ function AppRoutes() {
 
 function App() {
   return (
-    <BrowserRouter>
-      <AppRoutes />
-    </BrowserRouter>
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <AppRoutes />
+      </BrowserRouter>
+    </QueryClientProvider>
   );
 }
 

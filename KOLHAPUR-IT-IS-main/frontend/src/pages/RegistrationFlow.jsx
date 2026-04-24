@@ -154,6 +154,7 @@ export default function RegistrationFlow() {
     state: '',
     college: '',
     aadhaar: '',
+    github: '',
   });
 
   const parsedSkills = profile?.skills || [];
@@ -207,8 +208,8 @@ export default function RegistrationFlow() {
   };
 
   const handleComplete = async () => {
-    if (!profile || !form.email || !password) {
-      setError('Email, password, and parsed profile are required.');
+    if (!profile || !form.email || !password || !form.github) {
+      setError('Email, password, GitHub profile, and parsed profile are required.');
       return;
     }
     setSaving(true);
@@ -223,6 +224,7 @@ export default function RegistrationFlow() {
         state: form.state,
         college: form.college,
         aadhaar: form.aadhaar,
+        github: form.github,
         skills: profile.skills?.map((skill) => skill.skillNormalized) || [],
         resume_file_url: resumeMeta,
       };
@@ -392,6 +394,10 @@ export default function RegistrationFlow() {
                 <div>
                   <label className="mb-1 block text-xs font-bold uppercase tracking-[0.2em] text-slate-500">Aadhaar</label>
                   <input value={form.aadhaar} onChange={(e) => setForm((current) => ({ ...current, aadhaar: e.target.value.replace(/\D/g, '').slice(0, 12) }))} className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-emerald-400" />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="mb-1 block text-xs font-bold uppercase tracking-[0.2em] text-slate-500">GitHub Profile Link <span className="text-rose-600">*</span></label>
+                  <input value={form.github} onChange={(e) => setForm((current) => ({ ...current, github: e.target.value }))} placeholder="https://github.com/yourprofile" className="w-full rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-emerald-400" />
                 </div>
               </div>
 

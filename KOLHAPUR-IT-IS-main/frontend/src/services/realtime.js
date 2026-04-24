@@ -1,8 +1,10 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+import { API_BASE } from "../api/config";
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || API_BASE || '';
 
 const getWebSocketUrl = () => {
   if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL;
-  if (!API_BASE_URL) return 'ws://127.0.0.1:8000/ws';
+  if (!API_BASE_URL) return 'ws://localhost:8000/ws';
   const base = new URL(API_BASE_URL, window.location.origin);
   base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
   base.pathname = '/ws';

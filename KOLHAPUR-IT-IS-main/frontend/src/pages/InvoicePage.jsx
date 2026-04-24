@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { invoicesAPI } from "../services/api";
+import { API_BASE } from "../api/config";
 import { FileText, CheckCircle, Clock, TrendingUp, AlertTriangle, ShieldCheck, Star } from "lucide-react";
 
 const InvoicePage = () => {
@@ -25,7 +26,7 @@ useEffect(() => {
           let submissionStatus = null;
           try {
             const ratingRes = await fetch(
-              `http://localhost:8000/api/ratings/project/${projId}`
+              `${API_BASE}/api/ratings/project/${projId}`
             );
             if (ratingRes.ok) {
               const ratingData = await ratingRes.json();

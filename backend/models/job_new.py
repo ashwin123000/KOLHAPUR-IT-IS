@@ -52,6 +52,10 @@ class Job(Base):
         default=[],
         comment='[{skill: "Python", weight: 10, required: true}]'
     )
+    repo_url = Column(Text, nullable=True)
+    codebase_path = Column(Text, nullable=True)
+    environment = Column(JSONB, nullable=False, default=dict)
+    starter_code = Column(Text, nullable=True)
     
     status = Column(
         String(50),

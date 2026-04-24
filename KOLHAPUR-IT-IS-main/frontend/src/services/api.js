@@ -154,6 +154,21 @@ export const assessmentAPI = {
   closeVmAssessment: (assessmentId) => api.patch(`/api/v1/assessments/${assessmentId}/close`),
 };
 
+export const vmAssessmentAPI = {
+  getProjects: () => api.get('/api/v1/vm/projects'),
+  start: (projectId) => api.post('/api/v1/vm/start', { project_id: projectId }),
+  session: (sessionId) => api.get(`/api/v1/vm/session/${sessionId}`),
+  autosave: (sessionId, code) => api.post('/api/v1/vm/autosave', { session_id: sessionId, code }),
+  run: (sessionId, code, language = 'python') => api.post('/api/v1/vm/run', { session_id: sessionId, code, language }),
+  submit: (sessionId, code, language = 'python') => api.post('/api/v1/vm/submit', { session_id: sessionId, code, language }),
+  questions: (sessionId) => api.get(`/api/v1/vm/questions/${sessionId}`),
+  answers: (sessionId, answers) => api.post('/api/v1/vm/answers', { session_id: sessionId, answers }),
+  result: (sessionId) => api.get(`/api/v1/vm/result/${sessionId}`),
+  leaderboard: (projectId) => api.get(`/api/v1/vm/leaderboard/${projectId}`),
+  improvement: (sessionId) => api.get(`/api/v1/vm/improvement/${sessionId}`),
+  end: (sessionId) => api.delete(`/api/v1/vm/session/${sessionId}`),
+};
+
 export const ratingsAPI = {
   create: (data) => api.post('/api/ratings/secure', data),
 };
@@ -218,7 +233,8 @@ export const intelligenceAPI = {
 
 export const chatAPI = {
   sendMessage: (message, path, history = [], userId = '', context = {}) =>
-    api.post('/api/chat', { message, path, history, user_id: userId, context }),
+    api.post('/api/chat', { message, path, history, user_id: userId, context, jobId: context?.job_id || context?.jobId || null }),
+  clearHistory: () => api.delete('/api/chat/clear'),
 };
 
 export default api;

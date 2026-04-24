@@ -43,6 +43,9 @@ class Settings(BaseSettings):
 
     LLM_MODEL: str = "claude-sonnet-4-20250514"
     """Claude model to use for all LLM operations"""
+    GROQ_API_KEY: Optional[str] = None
+    OPENAI_API_KEY: Optional[str] = None
+    CHROMA_PERSIST_DIR: str = "/tmp/chroma"
 
     # ============================================================
     # DOCKER (for VM sessions)
@@ -56,6 +59,10 @@ class Settings(BaseSettings):
     VM_PORT_RANGE_START: int = 8100
     VM_PORT_RANGE_END: int = 9000
     """Port range for VM container assignment"""
+    WORKSPACE_BASE_PATH: str = "/tmp/workspaces"
+    VM_POOL_SIZE: int = 4
+    MAX_SESSION_DURATION_MINUTES: int = 90
+    IDLE_TIMEOUT_MINUTES: int = 20
 
     # ============================================================
     # FILE STORAGE

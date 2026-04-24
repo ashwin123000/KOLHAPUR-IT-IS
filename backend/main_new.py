@@ -21,7 +21,8 @@ from routes.resumes import router as resumes_router
 from routes.jobs import router as jobs_router
 from routes.applications import router as applications_router
 from routes.chat import router as chat_router
-from routes.vm import router as vm_router
+from routes.vm import router as vm_router, projects_router, recruiter_router
+from services.vm_runtime import container_pool
 
 # ============================================================
 # LOGGING SETUP
@@ -66,6 +67,11 @@ async def lifespan(app: FastAPI):
         # Pass scheduler to resumes router
         from routes import resumes
         resumes.set_scheduler(scheduler)
+        try:
+            container_pool.warm_up()
+            logger.info("✅ VM container pool warmed")
+        except Exception as e:
+            logger.warning(f"VM pool warm-up warning: {e}")
         
     except Exception as e:
         logger.error(f"❌ Startup failed: {e}")
@@ -195,6 +201,10 @@ logger.info("✅ Chat router registered: /api/v1/chat/*")
 
 app.include_router(vm_router, prefix="/api/v1")
 logger.info("✅ VM router registered: /api/v1/vm/*")
+app.include_router(projects_router, prefix="/api/v1")
+logger.info("✅ Projects router registered: /api/v1/projects")
+app.include_router(recruiter_router, prefix="/api/v1")
+logger.info("✅ Recruiter analytics router registered: /api/v1/recruiter/*")
 
 
 # ============================================================
