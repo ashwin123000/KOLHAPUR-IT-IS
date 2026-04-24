@@ -36,3 +36,9 @@ anyio==4.13.0
 typing_extensions==4.15.0
 docker==7.1.0
 apscheduler==3.10.4
+
+# RAG / embeddings
+openai==1.52.2
+sentence-transformers==2.2.2
+faiss-cpu==1.8.0.post1
+numpy==1.26.2
