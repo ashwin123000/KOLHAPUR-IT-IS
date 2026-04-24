@@ -1,0 +1,130 @@
+{
+  "name": "Resume Parser",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "resume-upload",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json[\"headers\"][\"content-type\"]}}",
+              "operation": "contains",
+              "value2": "multipart"
+            }
+          ]
+        }
+      },
+      "name": "File Type Check",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "const text = $json.text || '';\nreturn [{\n  json: {\n    cleaned_text: text\n      .replace(/[•\\-\\*]/g, '')\n      .replace(/\\s+/g, ' ')\n      .trim()\n  }\n}];"
+      },
+      "name": "Clean Text",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "apiKey",
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a resume parser. Extract structured data from resumes.\n\nRETURN ONLY JSON. No explanation. No markdown.\n\nSchema:\n{\n  \"name\": \"\",\n  \"email\": \"\",\n  \"phone\": \"\",\n  \"city\": \"\",\n  \"state\": \"\",\n  \"summary\": \"\",\n  \"skills\": [],\n  \"education\": [],\n  \"experience\": [],\n  \"projects\": [],\n  \"certifications\": []\n}\n\nRules:\n- No hallucination\n- Missing fields = null\n- Skills must be array of strings\n- Normalize skills (ReactJS → React, nodejs → Node.js)\n- Remove duplicate skills\n- Return ONLY valid JSON"
+            },
+            {
+              "role": "user",
+              "content": "={{$json[\"cleaned_text\"]}}"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 2000,
+          "temperature": 0.1
+        }
+      },
+      "name": "OpenAI Parse",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "const raw = $json.message?.content || $json.text || '';\nlet parsed;\ntry {\n  const clean = raw.replace(/```json|```/g, '').trim();\n  parsed = JSON.parse(clean);\n} catch(e) {\n  parsed = { error: 'JSON parse failed', raw };\n}\nreturn [{ json: parsed }];"
+      },
+      "name": "Parse JSON",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:8000/api/resume/parsed",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "data",
+              "value": "={{JSON.stringify($json)}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Send to FastAPI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{JSON.stringify($json)}}",
+        "options": {}
+      },
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1560, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "File Type Check", "type": "main", "index": 0 }]]
+    },
+    "File Type Check": {
+      "main": [[{ "node": "Clean Text", "type": "main", "index": 0 }]]
+    },
+    "Clean Text": {
+      "main": [[{ "node": "OpenAI Parse", "type": "main", "index": 0 }]]
+    },
+    "OpenAI Parse": {
+      "main": [[{ "node": "Parse JSON", "type": "main", "index": 0 }]]
+    },
+    "Parse JSON": {
+      "main": [[{ "node": "Send to FastAPI", "type": "main", "index": 0 }]]
+    },
+    "Send to FastAPI": {
+      "main": [[{ "node": "Respond", "type": "main", "index": 0 }]]
+    }
+  }
+}

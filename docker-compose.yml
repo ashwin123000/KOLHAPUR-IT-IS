@@ -1,0 +1,63 @@
+version: "3.9"
+
+services:
+  mongo:
+    image: mongo:8.0
+    container_name: architectx_mongo
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - architectx_net
+
+  redis-stack:
+    image: redis/redis-stack:7.2.0-v20
+    container_name: architectx_redis
+    ports:
+      - "6379:6379"
+      - "8001:8001"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - architectx_net
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: architectx_n8n
+    environment:
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - N8N_SECURE_COOKIE=false
+      - WEBHOOK_URL=http://localhost:5678
+      - GENERIC_TIMEZONE=Asia/Calcutta
+      - N8N_RUNNERS_ENABLED=true
+    ports:
+      - "5678:5678"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis-stack:
+        condition: service_healthy
+    networks:
+      - architectx_net
+
+volumes:
+  mongo_data:
+  redis_data:
+
+networks:
+  architectx_net:
+    driver: bridge

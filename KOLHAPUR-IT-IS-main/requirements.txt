@@ -1,0 +1,38 @@
+# Architect-X backend dependencies
+# Install: pip install -r requirements.txt
+
+# ── Web framework ─────────────────────────────────────────────
+fastapi==0.135.2
+uvicorn==0.42.0
+python-multipart==0.0.26
+starlette==1.0.0
+
+# ── MongoDB (async) ───────────────────────────────────────────
+motor==3.7.1
+pymongo==4.15.4
+
+# ── Redis ─────────────────────────────────────────────────────
+redis==5.0.1
+
+# ── Auth / Security ───────────────────────────────────────────
+
+
+PyJWT==2.10.1
+
+# ── Data validation ───────────────────────────────────────────
+pydantic==2.12.5
+pydantic_core==2.41.5
+email-validator==2.3.0
+annotated-types==0.7.0
+
+# ── PDF / resume parsing ──────────────────────────────────────
+pdfminer.six==20251230
+pdfplumber==0.11.9
+pillow==12.2.0
+
+# ── Utilities ─────────────────────────────────────────────────
+python-dotenv==1.0.0
+anyio==4.13.0
+typing_extensions==4.15.0
+docker==7.1.0
+apscheduler==3.10.4

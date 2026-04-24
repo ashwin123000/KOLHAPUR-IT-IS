@@ -1,0 +1,71 @@
+# Implementation Plan - Freelance Platform Extensions
+
+Upgrade the platform with full DBMS integration, strong OOP principles, and a complete workflow from hiring to payment and ratings.
+
+## Proposed Changes
+
+### Database (SQLite)
+#### [MODIFY] [freelance_market.db](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/freelance_market.db)
+- Update `projects` table:
+    - Add `hired_freelancer_id` (TEXT, FK to users.id)
+    - Add `submission_timestamp` (TEXT)
+    - Add `submission_status` (TEXT: 'ON_TIME', 'LATE')
+- [NEW] Create `ratings` table:
+    - [id](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/src/models/Project.hpp#276-281) (TEXT PRIMARY KEY)
+    - `freelancer_id` (TEXT, FK to users.id)
+    - `project_id` (TEXT, FK to projects.id)
+    - `stars` (INTEGER, 1-5)
+    - `feedback` (TEXT)
+    - `on_time_status` (TEXT)
+
+### Backend Models (C++)
+#### [NEW] [RatingSystem.hpp](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/src/models/RatingSystem.hpp)
+- Implement `RatingSystem` class with `calculateScore(std::string freelancerId)` logic.
+- Logic includes: College year, timing bonuses/penalties, stars, and completed projects.
+#### [NEW] [Message.hpp](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/src/models/Message.hpp)
+- Standalone class for messages as requested.
+#### [MODIFY] [Project.hpp](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/src/models/Project.hpp)
+- Add submission tracking fields and logic.
+#### [MODIFY] [User.hpp](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/src/models/User.hpp)
+- Ensure Role-based logic and encapsulation are robust.
+
+### Backend Services & Controllers
+#### [MODIFY] [web_server.cpp](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/web_server.cpp) (or [src/main.cpp](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/src/main.cpp))
+- Update `DatabaseManager::initializeSchema` with new tables/columns.
+- Add `RatingService` for handling ratings and score calculations.
+- Update [ProjectService](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/src/main.cpp#460-572) for hiring flow and submission.
+- Update [PaymentService](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/backend/src/main.cpp#837-885) to enforce rating before payment.
+- Add/Update routes:
+    - `POST /api/projects/submit` - Freelancer submits work.
+    - `POST /api/ratings` - Client gives rating.
+    - `POST /api/payments` - Process payment (check rating first).
+    - `GET /api/talent/score/<id>` - Calculate and return score.
+
+### Frontend (React)
+#### [MODIFY] [FreelancerRecommendations.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/FreelancerRecommendations.jsx)
+- Add "Send Message" button and modal.
+- Ensure Score is fetched from the new backend calculation logic.
+#### [MODIFY] [ProjectDetails.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/ProjectDetails.jsx)
+- Add "Submit Work" button for freelancers.
+- Show submission status (ON_TIME/LATE).
+#### [MODIFY] [ClientPayouts.jsx](file:///c:/Users/Admin/.gemini/antigravity/scratch/freelance_platform/frontend/src/pages/ClientPayouts.jsx)
+- Add rating and feedback form.
+- Enable payment button only after rating is submitted.
+
+## Verification Plan
+
+### Automated Tests
+- I will create a script `verify_logic.py` in `/tmp/` to test:
+    - `calculateScore` logic with various inputs (late vs on-time, different college years).
+    - DB integrity after additions.
+
+### Manual Verification
+- **Freelancer View**:
+    1. See a project with a deadline.
+    2. Click "Submit Work".
+    3. Verify status shows "ON_TIME" if before deadline.
+- **Client View**:
+    1. Go to "Manage Bids", Accept a freelancer.
+    2. Go to "Payouts", try to pay without rating (should be blocked).
+    3. Submit rating, then verify payment button is enabled.
+    4. Pay and check "Invoice" for details.

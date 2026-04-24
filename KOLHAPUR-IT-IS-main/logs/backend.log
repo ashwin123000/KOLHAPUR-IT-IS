@@ -1,0 +1,14 @@
+GET /api/jobs -> 200 (0.02s)
+INFO:     127.0.0.1:55217 - "GET /api/jobs HTTP/1.1" 200 OK
+POST /api/jobs -> 201 (0.04s)
+INFO:     127.0.0.1:55218 - "POST /api/jobs HTTP/1.1" 201 Created
+POST /api/auth/register-v2 -> 201 (0.05s)
+INFO:     127.0.0.1:55219 - "POST /api/auth/register-v2 HTTP/1.1" 201 Created
+POST /api/auth/register-v2 -> 409 (0.02s)
+INFO:     127.0.0.1:55219 - "POST /api/auth/register-v2 HTTP/1.1" 409 Conflict
+GET /api/jobs -> 200 (0.00s)
+INFO:     127.0.0.1:49230 - "GET /api/jobs HTTP/1.1" 200 OK
+POST /api/n8n/candidates -> 201 (0.03s)
+INFO:     127.0.0.1:52160 - "POST /api/n8n/candidates HTTP/1.1" 201 Created
+GET /api/health -> 200 (0.01s)
+INFO:     127.0.0.1:51283 - "GET /api/health HTTP/1.1" 200 OK
