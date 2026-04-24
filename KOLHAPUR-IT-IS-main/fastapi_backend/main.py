@@ -36,7 +36,17 @@ from .database import (
     loads,
 )
 from .mongodb_realtime import mongo_runtime, serialize_mongo
-from .routes import assessments_router, auth_router, notifications_router, projects_router, stats_router, talent_intelligence_router, tests_router, vm_router
+from .routes import (
+    assessments_router,
+    auth_router,
+    github_project_intelligence_router,
+    notifications_router,
+    projects_router,
+    stats_router,
+    talent_intelligence_router,
+    tests_router,
+    vm_router,
+)
 from .routes.auth import get_current_user
 from .services.scheduler import shutdown_scheduler, start_scheduler
 from .services.seeker_intelligence import seeker_intelligence_service
@@ -132,6 +142,7 @@ app.include_router(projects_router, prefix="/api/projects", tags=["projects"])
 app.include_router(projects_router, prefix="/api/v1/projects", tags=["projects-compat"])
 app.include_router(stats_router, prefix="/api/stats", tags=["stats"])
 app.include_router(talent_intelligence_router, prefix="/api", tags=["talent-intelligence"])
+app.include_router(github_project_intelligence_router, prefix="/api/intelligence", tags=["github-project-intelligence"])
 app.include_router(tests_router, prefix="/api", tags=["assessments"])
 app.include_router(assessments_router, prefix="/api/v1/assessments", tags=["vm-assessments"])
 app.include_router(vm_router, prefix="/api/v1/vm", tags=["vm"])
